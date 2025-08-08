@@ -1,0 +1,12 @@
+/target
+ignore/
+ignore/*
+libs/
+libs/*
+*.pom
+*.jar
+.jice/
+.jice/*
+src/
+src/*
+jice.toml
