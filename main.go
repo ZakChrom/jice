@@ -141,6 +141,7 @@ type Dependency struct {
     Description *string
     Url *string
     Dependencies []Dependency
+    Repo string
 }
 
 func replace_stupid_string_with_props(s string, props map[string]string) string {
@@ -199,10 +200,7 @@ func get_dep(jice Jice, repo string, g string, a string, v string) Project {
     check(err);
 
     props := make(map[string]string);
-    management := make(map[struct { GroupId string; ArtifactId string }] struct {
-        Version string
-        Scope *string
-    });
+    management := make(GroupArtifactToVersionScope);
     var parent Project;
     if project.Parent != nil {
         if strings.Contains(project.Parent.GroupId, "${")    { panic("fuck off") }
@@ -241,9 +239,10 @@ func get_dep(jice Jice, repo string, g string, a string, v string) Project {
                 GroupId: d.GroupId,
                 ArtifactId: d.ArtifactId,
             };
-            management[k] = struct { Version string; Scope *string }{
+            management[k] = struct { Version string; Scope *string; Repo string } {
                 Version: replace_stupid_string_with_props(d.Version, props),
                 Scope: d.Scope,
+                Repo: repo,
             }
         }
     }
@@ -256,9 +255,10 @@ func get_dep(jice Jice, repo string, g string, a string, v string) Project {
             GroupId: d.GroupId,
             ArtifactId: d.ArtifactId,
         };
-        management[k] = struct { Version string; Scope *string }{
+        management[k] = struct { Version string; Scope *string; Repo string }{
             Version: replace_stupid_string_with_props(d.Version, props),
             Scope: d.Scope,
+            Repo: repo,
         }
     }
 
@@ -297,6 +297,7 @@ func get_all(jice Jice, repo string, g string, a string, v string) Dependency {
     real.Name = dep.Name;
     real.Description = dep.Description;
     real.Url = dep.Url;
+    real.Repo = repo;
     // pp.Println(real.Group, real.Artifact, real.Version);
 
     var deps []Dependency;
@@ -341,7 +342,29 @@ type Jice struct {
     DefaultRepo string
 }
 
-func build(jice Jice, config JiceConfig, deps []Dependency) {
+func build(jice Jice, config JiceConfig, deps []Dependency, thingy GroupArtifactToVersionScope) {
+    for k, d := range thingy {
+        g := k.GroupId;
+        a := k.ArtifactId;
+        v := d.Version;
+
+        jar, _ := get_thing(strings.Replace(g, ".", "/", -1), a, v);
+        _, err := get_or_cache(
+            d.Repo + "/" + jar,
+            fmt.Sprintf(
+                "%s-%s-%s.jar",
+                url.QueryEscape(g),
+                url.QueryEscape(a),
+                url.QueryEscape(v),
+            ),
+            true,
+        );
+        if err != nil {
+            fmt.Println("WARNING: Failed to get jar for " + jar);
+        }
+    }
+
+
     os.RemoveAll("./.jice/output")
 
     var javas []string;
@@ -384,6 +407,33 @@ func get_all_deps_from_config(jice Jice, config JiceConfig) []Dependency {
     return deps;
 }
 
+type GroupArtifactToVersionScope map[struct {
+    GroupId string
+    ArtifactId string
+}] struct {
+    Version string
+    Scope *string
+    Repo string
+}
+
+func thing(thingy GroupArtifactToVersionScope, deps []Dependency) {
+    for _, d := range deps {
+        k := struct { GroupId string; ArtifactId string }{
+            GroupId: d.Group,
+            ArtifactId: d.Artifact,
+        };
+        _, ok := thingy[k];
+        if !ok {
+            thingy[k] = struct { Version string; Scope *string; Repo string } {
+                Version: d.Version,
+                Scope: nil,
+                Repo: d.Repo,
+            }
+        }
+        thing(thingy, d.Dependencies)
+    }
+}
+
 func main() {
     var config JiceConfig;
     text, err := os.ReadFile("jice.toml");
@@ -401,7 +451,10 @@ func main() {
     }
     if args[0] == "build" {
         deps := get_all_deps_from_config(jice, config);
-        build(jice, config, deps);
+        thingy := make(GroupArtifactToVersionScope);
+        thing(thingy, deps);
+        pp.Println(thingy);
+        build(jice, config, deps, thingy);
         // dep := get_all(jice, "https://repo1.maven.org/maven2", "com.google.guava", "guava", "33.3.1-jre")
         // project := get_dep(jice, "https://repo1.maven.org/maven2", "com.google.errorprone", "error_prone_annotations", "2.28.0")
     } else if args[0] == "clean" {
