@@ -360,7 +360,7 @@ func build(jice Jice, config JiceConfig, deps []Dependency, thingy GroupArtifact
             true,
         );
         if err != nil {
-            fmt.Println("WARNING: Failed to get jar for " + jar);
+            fmt.Println("WARNING: Failed to get jar for " + g + " " + a + " " + v);
         }
     }
 
@@ -378,7 +378,7 @@ func build(jice Jice, config JiceConfig, deps []Dependency, thingy GroupArtifact
     
     args := []string {
         "-proc:none",
-        "-cp", "./.jice/jars/",
+        "-cp", "./.jice/jars/*",
         "-d", "./.jice/output/",
     };
     
@@ -453,7 +453,6 @@ func main() {
         deps := get_all_deps_from_config(jice, config);
         thingy := make(GroupArtifactToVersionScope);
         thing(thingy, deps);
-        pp.Println(thingy);
         build(jice, config, deps, thingy);
         // dep := get_all(jice, "https://repo1.maven.org/maven2", "com.google.guava", "guava", "33.3.1-jre")
         // project := get_dep(jice, "https://repo1.maven.org/maven2", "com.google.errorprone", "error_prone_annotations", "2.28.0")
