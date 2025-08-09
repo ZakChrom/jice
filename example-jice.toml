@@ -1,8 +1,11 @@
 [package]
+# Looks for any .java files in the directory recursively
 source_dir = "src"
 
 [dependencies]
 "net.fabricmc.fabric-api:fabric-api" = "0.131.2+1.21.9"
 
 [repos]
+# If the package isnt here default repo is maven repos
+# Also if it cant find this in the specified repo it will try the maven repo
 "net.fabricmc.fabric-api:fabric-api" = "https://maven.fabricmc.net"
