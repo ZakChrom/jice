@@ -1,6 +1,8 @@
 package main
 
 import (
+    "strings"
+    "errors"
 	"encoding/xml"
 	"fmt"
 	"io"
@@ -10,8 +12,7 @@ import (
     "os/exec"
     "path/filepath"
     "io/fs"
-    "strings"
-    "errors"
+    "slices"
 	"github.com/k0kubun/pp/v3"
     "github.com/pelletier/go-toml/v2"
 )
@@ -95,13 +96,8 @@ func exists(path string) (bool, error) {
 	}
 }
 
-func get_or_cache(url string, cache_name string, jar bool) ([]byte, error) {
-    path := "./.jice/"
-    if jar {
-        path += "jars/"
-    } else {
-        path += "poms/"
-    }
+func get_or_cache(url string, cache_name string, folder string) ([]byte, error) {
+    path := "./.jice/" + folder + "/";
     err := os.MkdirAll(path, 0775);
     check(err);
 
@@ -120,7 +116,7 @@ func get_or_cache(url string, cache_name string, jar bool) ([]byte, error) {
     defer resp.Body.Close();
 
     if resp.StatusCode == 404 {
-        fmt.Println("404: " + url)
+        // fmt.Println("404: " + url)
         return nil, errors.New("404")
     }
 
@@ -167,8 +163,9 @@ func replace_stupid_string_with_props(s string, props map[string]string) string 
         }
         if c == '}' {
             stupid = 0;
-            if props[prop] == "" {
-                panic("empty prop")
+            _, ok := props[prop]
+            if !ok {
+                panic("empty prop: " + prop)
             }
             new += props[prop];
             prop = "";
@@ -185,12 +182,13 @@ func replace_stupid_string_with_props(s string, props map[string]string) string 
     return new;
 }
 
-func get_dep(jice Jice, repo string, g string, a string, v string) Project {
+func get_dep(config JiceConfig, repo string, g string, a string, v string) Project {
     _, pom := get_thing(strings.Replace(g, ".", "/", -1), a, v);
 
-    var pom_content, err = get_or_cache(repo + "/" + pom, fmt.Sprintf("%s-%s-%s.pom", url.QueryEscape(g), url.QueryEscape(a), url.QueryEscape(v)), false);
+    thing := fmt.Sprintf("%s-%s-%s.pom", url.QueryEscape(g), url.QueryEscape(a), url.QueryEscape(v));
+    var pom_content, err = get_or_cache(repo + "/" + pom, thing, "cache");
     if err != nil {
-        pom_content, err = get_or_cache(jice.DefaultRepo + "/" + pom, fmt.Sprintf("%s-%s-%s.pom", g, a, v), false);
+        pom_content, err = get_or_cache(config.Package.DefaultRepo + "/" + pom, thing, "cache");
         check(err)
     }
     // fmt.Println(string(pom_content));
@@ -207,7 +205,7 @@ func get_dep(jice Jice, repo string, g string, a string, v string) Project {
         if strings.Contains(project.Parent.ArtifactId, "${") { panic("fuck off") }
         if strings.Contains(project.Parent.Version, "${")    { panic("fuck off") }
 
-        parent = get_dep(jice, repo, project.Parent.GroupId, project.Parent.ArtifactId, project.Parent.Version);
+        parent = get_dep(config, repo, project.Parent.GroupId, project.Parent.ArtifactId, project.Parent.Version);
         for k, v := range parent.Properties {
             props[k] = v;
         }
@@ -216,6 +214,7 @@ func get_dep(jice Jice, repo string, g string, a string, v string) Project {
             project.GroupId = parent.GroupId
         }
         if project.Version == nil {
+            props["project.version"] = *parent.Version;
             project.Version = parent.Version
         }
         if project.Url == nil {
@@ -228,6 +227,11 @@ func get_dep(jice Jice, repo string, g string, a string, v string) Project {
 
     for k, v := range project.Properties {
         props[k] = v;
+    }
+
+    _, ok := props["project.version"];
+    if !ok {
+        props["project.version"] = *project.Version;
     }
 
     if project.Parent != nil {
@@ -288,9 +292,9 @@ func get_dep(jice Jice, repo string, g string, a string, v string) Project {
     return project;
 }
 
-func get_all(jice Jice, repo string, g string, a string, v string) Dependency {
+func get_all(config JiceConfig, repo string, g string, a string, v string) Dependency {
     var real Dependency;
-    dep := get_dep(jice, repo, g, a, v);
+    dep := get_dep(config, repo, g, a, v);
     real.Group = *dep.GroupId;
     real.Artifact = dep.ArtifactId;
     real.Version = *dep.Version;
@@ -305,13 +309,13 @@ func get_all(jice Jice, repo string, g string, a string, v string) Dependency {
         if d.Scope != nil {
             if *d.Scope == "test" {
                 continue
-            } else if *d.Scope == "compile" {
+            } else if *d.Scope == "compile" || *d.Scope == "runtime" {
 
             } else {
-                panic("a")
+                panic("Unexpected scope: " + *d.Scope)
             }
         }
-        deps = append(deps, get_all(jice, repo, d.GroupId, d.ArtifactId, *d.Version));
+        deps = append(deps, get_all(config, repo, d.GroupId, d.ArtifactId, *d.Version));
     }
     real.Dependencies = deps;
     return real;
@@ -333,16 +337,67 @@ func tree(deps []Dependency, indent int) {
 type JiceConfig struct {
     Package struct {
         SourceDir string `toml:"source_dir"`
+        JavacArgs *[]string `toml:"javac_args,omitempty"`
+        DefaultRepo string `toml:"default_repo,omitempty"`
     } `toml:"package"`
     Dependencies map[string]string `toml:"dependencies"`
     Repos map[string]string `toml:"repos"`
+    Extra map[string]string `toml:"extra`
+    Mapping *struct {
+        Map string `toml:"map"`
+        // Intermediary string `toml:"intermediary"`
+        Mapped []string `toml:"mapped"`
+    } `toml:"mapping,omitempty"`
 }
 
-type Jice struct {
-    DefaultRepo string
+func do_map(config JiceConfig, deps []Dependency, already_did []string) {
+    for _, d := range deps {
+        should_map := false;
+        for _, r := range config.Mapping.Mapped {
+            if strings.HasSuffix(r, "/") {
+                r = r[:len(r) - 1];
+            }
+            if strings.HasSuffix(d.Repo, "/") {
+                d.Repo = d.Repo[:len(d.Repo) - 1];
+            }
+            if d.Repo == r {
+                should_map = true;
+                break
+            }
+        }
+        if should_map {
+            path := fmt.Sprintf(
+                "%s-%s-%s.jar",
+                url.QueryEscape(d.Group),
+                url.QueryEscape(d.Artifact),
+                url.QueryEscape(d.Version),
+            );
+            if !slices.Contains(already_did, path) {
+                exists, err := exists("./.jice/cache/" + path);
+                check(err);
+                if exists {
+                    cmd := exec.Command(
+                        "java",
+                        "-jar",
+                        "./.jice/mapping/remapper.jar",
+                        "./.jice/cache/" + path,
+                        "./.jice/cache/" + path,
+                        "./.jice/mapping/mappings.tiny",
+                        "official",
+                        "named",
+                    );
+                    out, err := cmd.Output();
+                    fmt.Print("Mapping " + path + ": " + string(out));
+                    check(err)
+                    already_did = append(already_did, path)
+                }
+            }
+        }
+        do_map(config, d.Dependencies, already_did);
+    }
 }
 
-func build(jice Jice, config JiceConfig, deps []Dependency, thingy GroupArtifactToVersionScope) {
+func build(config JiceConfig, deps []Dependency, thingy GroupArtifactToVersionScope) {
     for k, d := range thingy {
         g := k.GroupId;
         a := k.ArtifactId;
@@ -357,13 +412,39 @@ func build(jice Jice, config JiceConfig, deps []Dependency, thingy GroupArtifact
                 url.QueryEscape(a),
                 url.QueryEscape(v),
             ),
-            true,
+            "cache",
         );
         if err != nil {
             fmt.Println("WARNING: Failed to get jar for " + g + " " + a + " " + v);
         }
     }
+    
+    for k, d := range config.Extra {
+        thing := strings.Split(k, ":");
+        _, err := get_or_cache(d, thing[1] + ".jar", "cache");
+        check(err)
+    }
 
+    if config.Mapping != nil {
+        _, err := get_or_cache(config.Mapping.Map, "mappings.jar", "mapping");
+        check(err);
+        // _, err = get_or_cache(config.Mapping.Intermediary, "intermediary.jar", "mapping");
+        // check(err);
+        check(exec.Command("bash", "-c", "cd ./.jice/mapping && unzip -jo mappings.jar").Run());
+        // check(exec.Command("bash", "-c", "cd ./.jice/mapping && unzip -jo intermediary.jar && mv mappings.tiny off2inter.tiny").Run());
+
+        _, err = get_or_cache(
+            "https://maven.fabricmc.net/net/fabricmc/tiny-remapper/0.9.0/tiny-remapper-0.9.0-fat.jar",
+            "remapper.jar",
+            "mapping",
+        )
+        check(err);
+
+        do_map(config, deps, []string{});
+    }
+
+    // java -jar tiny-remapper-0.9.0-fat.jar client.jar client-intermediary.jar intermediary.tiny official intermediary
+    // java -jar tiny-remapper-0.9.0-fat.jar client-intermediary.jar ../libs/client-1.21.5-mapped.jar yarn.tiny intermediary named
 
     os.RemoveAll("./.jice/output")
 
@@ -375,12 +456,16 @@ func build(jice Jice, config JiceConfig, deps []Dependency, thingy GroupArtifact
         return nil;
     });
     check(err);
-    
+
     args := []string {
         "-proc:none",
-        "-cp", "./.jice/jars/*",
+        "-cp", "./.jice/cache/*",
         "-d", "./.jice/output/",
     };
+
+    if config.Package.JavacArgs != nil {
+        args = append(args, *config.Package.JavacArgs...);
+    }
     
     // TODO: Someone could put command args into filename and fuck shit up
     args = append(args, javas...);
@@ -393,16 +478,16 @@ func build(jice Jice, config JiceConfig, deps []Dependency, thingy GroupArtifact
     check(err);
 }
 
-func get_all_deps_from_config(jice Jice, config JiceConfig) []Dependency {
+func get_all_deps_from_config(config JiceConfig) []Dependency {
     var deps []Dependency;
     for k, v := range config.Dependencies {
-        repo := jice.DefaultRepo;
+        repo := config.Package.DefaultRepo;
         r, ok := config.Repos[k];
         if ok {
             repo = r;
         }
         thing := strings.Split(k, ":");
-        deps = append(deps, get_all(jice, repo, thing[0], thing[1], v));
+        deps = append(deps, get_all(config, repo, thing[0], thing[1], v));
     }
     return deps;
 }
@@ -440,9 +525,9 @@ func main() {
     check(err);
     err = toml.Unmarshal(text, &config)
     check(err);
-
-    var jice Jice;
-    jice.DefaultRepo = "https://repo1.maven.org/maven2";
+    if config.Package.DefaultRepo == "" {
+        config.Package.DefaultRepo = "https://repo1.maven.org/maven2";
+    }
 
     args := os.Args[1:];
     if len(args) == 0 {
@@ -450,16 +535,16 @@ func main() {
         return;
     }
     if args[0] == "build" {
-        deps := get_all_deps_from_config(jice, config);
+        deps := get_all_deps_from_config(config);
         thingy := make(GroupArtifactToVersionScope);
         thing(thingy, deps);
-        build(jice, config, deps, thingy);
+        build(config, deps, thingy);
         // dep := get_all(jice, "https://repo1.maven.org/maven2", "com.google.guava", "guava", "33.3.1-jre")
         // project := get_dep(jice, "https://repo1.maven.org/maven2", "com.google.errorprone", "error_prone_annotations", "2.28.0")
     } else if args[0] == "clean" {
         os.RemoveAll("./.jice")
     } else if args[0] == "tree" {
-        tree(get_all_deps_from_config(jice, config), 0)
+        tree(get_all_deps_from_config(config), 0)
     } else {
         fmt.Println("Unknown arg: " + args[0])
     }
