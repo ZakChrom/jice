@@ -439,6 +439,12 @@ func build(config JiceConfig, deps []Dependency, thingy GroupArtifactToVersionSc
     }
 
     if config.Mapping != nil {
+        if config.Mapping.Map == "" {
+            panic("Missing mapping url")
+        }
+        if config.Mapping.Intermediary == "" {
+            panic("Missing intermediary mapping url")
+        }
         _, err := get_or_cache(config.Mapping.Map, "mappings.jar", "mapping");
         check(err);
         _, err = get_or_cache(config.Mapping.Intermediary, "intermediary.jar", "mapping");
