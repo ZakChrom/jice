@@ -354,12 +354,8 @@ func do_map(config JiceConfig, deps []Dependency, already_did *[]string, command
     for _, d := range deps {
         should_map := false;
         for _, r := range config.Mapping.Mapped {
-            if strings.HasSuffix(r, "/") {
-                r = r[:len(r) - 1];
-            }
-            if strings.HasSuffix(d.Repo, "/") {
-                d.Repo = d.Repo[:len(d.Repo) - 1];
-            }
+            r = strings.TrimSuffix(r, "/")
+            d.Repo = strings.TrimSuffix(d.Repo, "/")
             if d.Repo == r {
                 should_map = true;
                 break
