@@ -350,7 +350,7 @@ type JiceConfig struct {
     } `toml:"mapping,omitempty"`
 }
 
-func do_map(config JiceConfig, deps []Dependency, already_did *[]string) {
+func do_map(config JiceConfig, deps []Dependency, already_did *[]string, commands *[]struct{Cmd *exec.Cmd; Thing string}) {
     for _, d := range deps {
         should_map := false;
         for _, r := range config.Mapping.Mapped {
@@ -386,9 +386,12 @@ func do_map(config JiceConfig, deps []Dependency, already_did *[]string) {
                         "official",
                         "intermediary",
                     );
-                    out, err := cmd.Output();
-                    fmt.Print("Mapping " + path + ": " + string(out));
-                    check(err)
+                    check(cmd.Start());
+                    *commands = append(*commands, struct {Cmd *exec.Cmd; Thing string}{
+                        Cmd: cmd,
+                        Thing: path,
+                    });
+
                     cmd = exec.Command(
                         "java",
                         "-jar",
@@ -399,14 +402,25 @@ func do_map(config JiceConfig, deps []Dependency, already_did *[]string) {
                         "intermediary",
                         "named",
                     );
-                    out, err = cmd.Output();
-                    fmt.Print("Mapping " + path + ": " + string(out));
-                    check(err)
+                    check(cmd.Start());
+                    *commands = append(*commands, struct {Cmd *exec.Cmd; Thing string}{
+                        Cmd: cmd,
+                        Thing: path,
+                    });
+
+                    if len(*commands) >= 12 {
+                        for _, cmd := range *commands {
+                            check(cmd.Cmd.Wait());
+                            fmt.Println("Mapped " + cmd.Thing);
+                            check(err)
+                        }
+                        *commands = []struct {Cmd *exec.Cmd; Thing string}{}
+                    }
                     *already_did = append(*already_did, path)
                 }
             }
         }
-        do_map(config, d.Dependencies, already_did);
+        do_map(config, d.Dependencies, already_did, commands);
     }
 }
 
@@ -472,7 +486,8 @@ func build(config JiceConfig, deps []Dependency, thingy GroupArtifactToVersionSc
             err = toml.Unmarshal(text, &cache)
             check(err);
         }
-        do_map(config, deps, &cache.Mapped);
+        do_map(config, deps, &cache.Mapped, &[]struct{Cmd *exec.Cmd; Thing string}{});
+
         for k, _ := range config.Extra {
             thing := strings.Split(k, ":");
             cmd := exec.Command(
@@ -484,10 +499,10 @@ func build(config JiceConfig, deps []Dependency, thingy GroupArtifactToVersionSc
                 "./.jice/mapping/off2inter.tiny",
                 "official",
                 "intermediary",
-            );
+            )
             out, err := cmd.Output();
             fmt.Print("Mapping " + thing[1] + ": " + string(out));
-            check(err)
+            check(err);
             cmd = exec.Command(
                 "java",
                 "-jar",
