@@ -345,7 +345,7 @@ type JiceConfig struct {
     Extra map[string]string `toml:"extra`
     Mapping *struct {
         Map string `toml:"map"`
-        // Intermediary string `toml:"intermediary"`
+        Intermediary string `toml:"intermediary"`
         Mapped []string `toml:"mapped"`
     } `toml:"mapping,omitempty"`
 }
@@ -382,11 +382,24 @@ func do_map(config JiceConfig, deps []Dependency, already_did []string) {
                         "./.jice/mapping/remapper.jar",
                         "./.jice/cache/" + path,
                         "./.jice/cache/" + path,
-                        "./.jice/mapping/mappings.tiny",
+                        "./.jice/mapping/off2inter.tiny",
                         "official",
-                        "named",
+                        "intermediary",
                     );
                     out, err := cmd.Output();
+                    fmt.Print("Mapping " + path + ": " + string(out));
+                    check(err)
+                    cmd = exec.Command(
+                        "java",
+                        "-jar",
+                        "./.jice/mapping/remapper.jar",
+                        "./.jice/cache/" + path,
+                        "./.jice/cache/" + path,
+                        "./.jice/mapping/inter2named.tiny",
+                        "intermediary",
+                        "named",
+                    );
+                    out, err = cmd.Output();
                     fmt.Print("Mapping " + path + ": " + string(out));
                     check(err)
                     already_did = append(already_did, path)
@@ -428,10 +441,10 @@ func build(config JiceConfig, deps []Dependency, thingy GroupArtifactToVersionSc
     if config.Mapping != nil {
         _, err := get_or_cache(config.Mapping.Map, "mappings.jar", "mapping");
         check(err);
-        // _, err = get_or_cache(config.Mapping.Intermediary, "intermediary.jar", "mapping");
-        // check(err);
-        check(exec.Command("bash", "-c", "cd ./.jice/mapping && unzip -jo mappings.jar").Run());
-        // check(exec.Command("bash", "-c", "cd ./.jice/mapping && unzip -jo intermediary.jar && mv mappings.tiny off2inter.tiny").Run());
+        _, err = get_or_cache(config.Mapping.Intermediary, "intermediary.jar", "mapping");
+        check(err);
+        check(exec.Command("bash", "-c", "cd ./.jice/mapping && unzip -jo mappings.jar && mv mappings.tiny inter2named.tiny").Run());
+        check(exec.Command("bash", "-c", "cd ./.jice/mapping && unzip -jo intermediary.jar && mv mappings.tiny off2inter.tiny").Run());
 
         _, err = get_or_cache(
             "https://maven.fabricmc.net/net/fabricmc/tiny-remapper/0.9.0/tiny-remapper-0.9.0-fat.jar",
@@ -441,6 +454,35 @@ func build(config JiceConfig, deps []Dependency, thingy GroupArtifactToVersionSc
         check(err);
 
         do_map(config, deps, []string{});
+        for k, _ := range config.Extra {
+            thing := strings.Split(k, ":");
+            cmd := exec.Command(
+                "java",
+                "-jar",
+                "./.jice/mapping/remapper.jar",
+                "./.jice/cache/" + thing[1] + ".jar",
+                "./.jice/cache/" + thing[1] + ".jar",
+                "./.jice/mapping/off2inter.tiny",
+                "official",
+                "intermediary",
+            );
+            out, err := cmd.Output();
+            fmt.Print("Mapping " + thing[1] + ": " + string(out));
+            check(err)
+            cmd = exec.Command(
+                "java",
+                "-jar",
+                "./.jice/mapping/remapper.jar",
+                "./.jice/cache/" + thing[1] + ".jar",
+                "./.jice/cache/" + thing[1] + ".jar",
+                "./.jice/mapping/inter2named.tiny",
+                "intermediary",
+                "named",
+            );
+            out, err = cmd.Output();
+            fmt.Print("Mapping " + thing[1] + ": " + string(out));
+            check(err)
+        }
     }
 
     // java -jar tiny-remapper-0.9.0-fat.jar client.jar client-intermediary.jar intermediary.tiny official intermediary
