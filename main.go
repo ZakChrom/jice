@@ -342,7 +342,7 @@ type JiceConfig struct {
     } `toml:"package"`
     Dependencies map[string]string `toml:"dependencies"`
     Repos map[string]string `toml:"repos"`
-    Extra map[string]string `toml:"extra`
+    Extra map[string]string `toml:"extra"`
     Mapping *struct {
         Map string `toml:"map"`
         Intermediary string `toml:"intermediary"`
@@ -350,7 +350,7 @@ type JiceConfig struct {
     } `toml:"mapping,omitempty"`
 }
 
-func do_map(config JiceConfig, deps []Dependency, already_did []string) {
+func do_map(config JiceConfig, deps []Dependency, already_did *[]string) {
     for _, d := range deps {
         should_map := false;
         for _, r := range config.Mapping.Mapped {
@@ -372,7 +372,7 @@ func do_map(config JiceConfig, deps []Dependency, already_did []string) {
                 url.QueryEscape(d.Artifact),
                 url.QueryEscape(d.Version),
             );
-            if !slices.Contains(already_did, path) {
+            if !slices.Contains(*already_did, path) {
                 exists, err := exists("./.jice/cache/" + path);
                 check(err);
                 if exists {
@@ -402,12 +402,16 @@ func do_map(config JiceConfig, deps []Dependency, already_did []string) {
                     out, err = cmd.Output();
                     fmt.Print("Mapping " + path + ": " + string(out));
                     check(err)
-                    already_did = append(already_did, path)
+                    *already_did = append(*already_did, path)
                 }
             }
         }
         do_map(config, d.Dependencies, already_did);
     }
+}
+
+type CacheThing struct {
+    Mapped []string `toml:"mapped"`
 }
 
 func build(config JiceConfig, deps []Dependency, thingy GroupArtifactToVersionScope) {
@@ -428,7 +432,7 @@ func build(config JiceConfig, deps []Dependency, thingy GroupArtifactToVersionSc
             "cache",
         );
         if err != nil {
-            fmt.Println("WARNING: Failed to get jar for " + g + " " + a + " " + v);
+            fmt.Println("WARNING: Failed to get jar for " + g + " " + a + " " + v + ": " + err.Error());
         }
     }
     
@@ -459,7 +463,16 @@ func build(config JiceConfig, deps []Dependency, thingy GroupArtifactToVersionSc
         )
         check(err);
 
-        do_map(config, deps, []string{});
+        var cache CacheThing;
+        exists, err := exists("./.jice/cache.toml");
+        check(err);
+        if exists {
+            text, err := os.ReadFile("./.jice/cache.toml");
+            check(err);
+            err = toml.Unmarshal(text, &cache)
+            check(err);
+        }
+        do_map(config, deps, &cache.Mapped);
         for k, _ := range config.Extra {
             thing := strings.Split(k, ":");
             cmd := exec.Command(
@@ -489,6 +502,9 @@ func build(config JiceConfig, deps []Dependency, thingy GroupArtifactToVersionSc
             fmt.Print("Mapping " + thing[1] + ": " + string(out));
             check(err)
         }
+        bytes, err := toml.Marshal(cache);
+        check(err);
+        check(os.WriteFile("./.jice/cache.toml", bytes, 0666));
     }
 
     // java -jar tiny-remapper-0.9.0-fat.jar client.jar client-intermediary.jar intermediary.tiny official intermediary
