@@ -14,8 +14,12 @@ default_repo = "repo url" # Optional. The default repo is maven
 # Optional thing to map jars for minecraft
 [mapping]
 map = "url to mappings jar. must contain mappings.tiny file inside the jar"
+intermediary = "url to intermediary jar. same as the map jar but intermediary"
 # Repos to map
 mapped = [
     "https://maven.fabricmc.net/",
     "https://libraries.minecraft.net/"
 ]
+
+[plugins]
+test = "url to lua file"
