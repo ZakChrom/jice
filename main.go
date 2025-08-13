@@ -12,9 +12,9 @@ import (
     "os/exec"
     "path/filepath"
     "io/fs"
-    "slices"
 	"github.com/k0kubun/pp/v3"
-    "github.com/pelletier/go-toml/v2"
+    "github.com/sblinch/kdl-go"
+    "github.com/yuin/gopher-lua"
 )
 
 type XMLProperties map[string]string
@@ -243,10 +243,11 @@ func get_dep(config JiceConfig, repo string, g string, a string, v string) Proje
                 GroupId: d.GroupId,
                 ArtifactId: d.ArtifactId,
             };
-            management[k] = struct { Version string; Scope *string; Repo string } {
+            management[k] = struct { Version string; Scope *string; Repo string; Url *string } {
                 Version: replace_stupid_string_with_props(d.Version, props),
                 Scope: d.Scope,
                 Repo: repo,
+                Url: nil,
             }
         }
     }
@@ -259,10 +260,11 @@ func get_dep(config JiceConfig, repo string, g string, a string, v string) Proje
             GroupId: d.GroupId,
             ArtifactId: d.ArtifactId,
         };
-        management[k] = struct { Version string; Scope *string; Repo string }{
+        management[k] = struct { Version string; Scope *string; Repo string; Url *string }{
             Version: replace_stupid_string_with_props(d.Version, props),
             Scope: d.Scope,
             Repo: repo,
+            Url: nil,
         }
     }
 
@@ -335,93 +337,24 @@ func tree(deps []Dependency, indent int) {
 }
 
 type JiceConfig struct {
+    L *lua.LState
     Package struct {
-        SourceDir string `toml:"source_dir"`
-        JavacArgs *[]string `toml:"javac_args,omitempty"`
-        DefaultRepo string `toml:"default_repo,omitempty"`
-    } `toml:"package"`
-    Dependencies map[string]string `toml:"dependencies"`
-    Repos map[string]string `toml:"repos"`
-    Extra map[string]string `toml:"extra"`
-    Mapping *struct {
-        Map string `toml:"map"`
-        Intermediary string `toml:"intermediary"`
-        Mapped []string `toml:"mapped"`
-    } `toml:"mapping,omitempty"`
-}
-
-func do_map(config JiceConfig, deps []Dependency, already_did *[]string, commands *[]struct{Cmd *exec.Cmd; Thing string}) {
-    for _, d := range deps {
-        should_map := false;
-        for _, r := range config.Mapping.Mapped {
-            r = strings.TrimSuffix(r, "/")
-            d.Repo = strings.TrimSuffix(d.Repo, "/")
-            if d.Repo == r {
-                should_map = true;
-                break
-            }
-        }
-        if should_map {
-            path := fmt.Sprintf(
-                "%s-%s-%s.jar",
-                url.QueryEscape(d.Group),
-                url.QueryEscape(d.Artifact),
-                url.QueryEscape(d.Version),
-            );
-            if !slices.Contains(*already_did, path) {
-                exists, err := exists("./.jice/cache/" + path);
-                check(err);
-                if exists {
-                    cmd := exec.Command(
-                        "java",
-                        "-jar",
-                        "./.jice/mapping/remapper.jar",
-                        "./.jice/cache/" + path,
-                        "./.jice/cache/" + path,
-                        "./.jice/mapping/off2inter.tiny",
-                        "official",
-                        "intermediary",
-                    );
-                    check(cmd.Start());
-                    *commands = append(*commands, struct {Cmd *exec.Cmd; Thing string}{
-                        Cmd: cmd,
-                        Thing: path,
-                    });
-
-                    cmd = exec.Command(
-                        "java",
-                        "-jar",
-                        "./.jice/mapping/remapper.jar",
-                        "./.jice/cache/" + path,
-                        "./.jice/cache/" + path,
-                        "./.jice/mapping/inter2named.tiny",
-                        "intermediary",
-                        "named",
-                    );
-                    check(cmd.Start());
-                    *commands = append(*commands, struct {Cmd *exec.Cmd; Thing string}{
-                        Cmd: cmd,
-                        Thing: path,
-                    });
-
-                    if len(*commands) >= 12 {
-                        for _, cmd := range *commands {
-                            check(cmd.Cmd.Wait());
-                            fmt.Println("Mapped " + cmd.Thing);
-                            check(err)
-                        }
-                        *commands = []struct {Cmd *exec.Cmd; Thing string}{}
-                    }
-                    *already_did = append(*already_did, path)
-                }
-            }
-        }
-        do_map(config, d.Dependencies, already_did, commands);
-    }
+        SourceDir string `kdl:"source_dir"`
+        JavacArgs *[]string `kdl:"javac_args,omitempty"`
+        DefaultRepo string `kdl:"default_repo,omitempty"`
+    } `kdl:"package"`
+    Dependencies map[string]string `kdl:"dependencies"`
+    Repos map[string]string `kdl:"repos"`
+    Extra map[string]string `kdl:"extra"`
+    Plugins map[string]struct {
+        Url string `kdl:"url"`
+        Config map[string]any `kdl:"config"`
+        Table *lua.LTable
+    } `kdl:"plugins"`
 }
 
 type CacheThing struct {
-    Mapped []string `toml:"mapped"`
+    Mapped []string `kdl:"mapped"`
 }
 
 func build(config JiceConfig, deps []Dependency, thingy GroupArtifactToVersionScope) {
@@ -431,95 +364,51 @@ func build(config JiceConfig, deps []Dependency, thingy GroupArtifactToVersionSc
         v := d.Version;
 
         jar, _ := get_thing(strings.Replace(g, ".", "/", -1), a, v);
-        _, err := get_or_cache(
-            d.Repo + "/" + jar,
-            fmt.Sprintf(
-                "%s-%s-%s.jar",
-                url.QueryEscape(g),
-                url.QueryEscape(a),
-                url.QueryEscape(v),
-            ),
-            "cache",
-        );
-        if err != nil {
-            fmt.Println("WARNING: Failed to get jar for " + g + " " + a + " " + v + ": " + err.Error());
-        }
-    }
-    
-    for k, d := range config.Extra {
-        thing := strings.Split(k, ":");
-        _, err := get_or_cache(d, thing[1] + ".jar", "cache");
-        check(err)
-    }
-
-    if config.Mapping != nil {
-        if config.Mapping.Map == "" {
-            panic("Missing mapping url")
-        }
-        if config.Mapping.Intermediary == "" {
-            panic("Missing intermediary mapping url")
-        }
-        _, err := get_or_cache(config.Mapping.Map, "mappings.jar", "mapping");
-        check(err);
-        _, err = get_or_cache(config.Mapping.Intermediary, "intermediary.jar", "mapping");
-        check(err);
-        check(exec.Command("bash", "-c", "cd ./.jice/mapping && unzip -jo mappings.jar && mv mappings.tiny inter2named.tiny").Run());
-        check(exec.Command("bash", "-c", "cd ./.jice/mapping && unzip -jo intermediary.jar && mv mappings.tiny off2inter.tiny").Run());
-
-        _, err = get_or_cache(
-            "https://maven.fabricmc.net/net/fabricmc/tiny-remapper/0.9.0/tiny-remapper-0.9.0-fat.jar",
-            "remapper.jar",
-            "mapping",
-        )
-        check(err);
-
-        var cache CacheThing;
-        exists, err := exists("./.jice/cache.toml");
-        check(err);
-        if exists {
-            text, err := os.ReadFile("./.jice/cache.toml");
-            check(err);
-            err = toml.Unmarshal(text, &cache)
-            check(err);
-        }
-        do_map(config, deps, &cache.Mapped, &[]struct{Cmd *exec.Cmd; Thing string}{});
-
-        for k, _ := range config.Extra {
-            thing := strings.Split(k, ":");
-            cmd := exec.Command(
-                "java",
-                "-jar",
-                "./.jice/mapping/remapper.jar",
-                "./.jice/cache/" + thing[1] + ".jar",
-                "./.jice/cache/" + thing[1] + ".jar",
-                "./.jice/mapping/off2inter.tiny",
-                "official",
-                "intermediary",
-            )
-            out, err := cmd.Output();
-            fmt.Print("Mapping " + thing[1] + ": " + string(out));
-            check(err);
-            cmd = exec.Command(
-                "java",
-                "-jar",
-                "./.jice/mapping/remapper.jar",
-                "./.jice/cache/" + thing[1] + ".jar",
-                "./.jice/cache/" + thing[1] + ".jar",
-                "./.jice/mapping/inter2named.tiny",
-                "intermediary",
-                "named",
+        if d.Repo == "from extra deps" {
+            _, err := get_or_cache(
+                *d.Url,
+                fmt.Sprintf(
+                    "%s-%s-%s.jar",
+                    url.QueryEscape(g),
+                    url.QueryEscape(a),
+                    url.QueryEscape(v),
+                ),
+                "cache",
             );
-            out, err = cmd.Output();
-            fmt.Print("Mapping " + thing[1] + ": " + string(out));
-            check(err)
+            if err != nil {
+                fmt.Println("WARNING: Failed to get extra jar for " + g + " " + a + " " + v + ": " + err.Error());
+            }
+        } else {
+            _, err := get_or_cache(
+                d.Repo + "/" + jar,
+                fmt.Sprintf(
+                    "%s-%s-%s.jar",
+                    url.QueryEscape(g),
+                    url.QueryEscape(a),
+                    url.QueryEscape(v),
+                ),
+                "cache",
+            );
+            if err != nil {
+                fmt.Println("WARNING: Failed to get jar for " + g + " " + a + " " + v + ": " + err.Error());
+            }
         }
-        bytes, err := toml.Marshal(cache);
-        check(err);
-        check(os.WriteFile("./.jice/cache.toml", bytes, 0666));
     }
 
-    // java -jar tiny-remapper-0.9.0-fat.jar client.jar client-intermediary.jar intermediary.tiny official intermediary
-    // java -jar tiny-remapper-0.9.0-fat.jar client-intermediary.jar ../libs/client-1.21.5-mapped.jar yarn.tiny intermediary named
+    for k, p := range config.Plugins {
+        lv := config.L.GetTable(p.Table, lua.LString("before_build"));
+        if fun, ok := lv.(*lua.LFunction); ok {
+            fmt.Println("Running plugin " + k + " before_build")
+            err := config.L.CallByParam(lua.P {
+                Fn: fun,
+                NRet: 0,
+                Protect: true,
+            })
+            if err != nil {
+                panic("lua error in plugin " + k + ": " + err.Error())
+            }
+        }
+    }
 
     os.RemoveAll("./.jice/output")
 
@@ -564,6 +453,20 @@ func get_all_deps_from_config(config JiceConfig) []Dependency {
         thing := strings.Split(k, ":");
         deps = append(deps, get_all(config, repo, thing[0], thing[1], v));
     }
+    for k, d := range config.Extra {
+        thing := strings.Split(k, ":");
+        desc := "extra dependency"
+        deps = append(deps, Dependency {
+            Group: thing[0],
+            Artifact: thing[1],
+            Version: "0.69.420",
+            Name: thing[1],
+            Description: &desc,
+            Url: &d,
+            Dependencies: []Dependency{},
+            Repo: "from extra deps",
+        })
+    }
     return deps;
 }
 
@@ -574,6 +477,7 @@ type GroupArtifactToVersionScope map[struct {
     Version string
     Scope *string
     Repo string
+    Url *string
 }
 
 func thing(thingy GroupArtifactToVersionScope, deps []Dependency) {
@@ -584,22 +488,133 @@ func thing(thingy GroupArtifactToVersionScope, deps []Dependency) {
         };
         _, ok := thingy[k];
         if !ok {
-            thingy[k] = struct { Version string; Scope *string; Repo string } {
+            thingy[k] = struct { Version string; Scope *string; Repo string; Url *string } {
                 Version: d.Version,
                 Scope: nil,
                 Repo: d.Repo,
+                Url: d.Url,
             }
         }
         thing(thingy, d.Dependencies)
     }
 }
 
+func any_to_lua(L *lua.LState, m map[string]any) *lua.LTable {
+    tbl := L.NewTable()
+    for k, v := range m {
+        switch val := v.(type) {
+            case string:         tbl.RawSetString(k, lua.LString(val))
+            case *string:        tbl.RawSetString(k, lua.LString(*val))
+            case int:            tbl.RawSetString(k, lua.LNumber(val))
+            case float64:        tbl.RawSetString(k, lua.LNumber(val))
+            case bool:           tbl.RawSetString(k, lua.LBool(val))
+            case map[string]any: tbl.RawSetString(k, any_to_lua(L, val))
+            case nil:            tbl.RawSetString(k, lua.LNil)
+            case lua.LValue:     tbl.RawSetString(k, val)
+            default:
+                pp.Println(val)
+                panic("Unknown type")
+        }
+    }
+    return tbl
+}
+
+func lua_get_dep(L *lua.LState, deps []Dependency) *lua.LTable {
+    tbl := L.NewTable()
+    for i, d := range deps {
+        thing := make(map[string]any)
+        thing["group"] = d.Group
+        thing["artifact"] = d.Artifact
+        thing["version"] = d.Version
+        thing["name"] = d.Group
+        if d.Description != nil {
+            thing["description"] = d.Group
+        }
+        if d.Url != nil {
+            thing["url"] = d.Url
+        }
+        thing["repo"] = d.Repo
+        thing["dependencies"] = lua_get_dep(L, d.Dependencies)
+        tbl.RawSetInt(i + 1, any_to_lua(L, thing))
+    }
+    return tbl
+}
+
+func init_lua(config JiceConfig, deps []Dependency) {
+    L := config.L;
+    jice_tbl := L.NewTable()
+    L.SetFuncs(jice_tbl, map[string]lua.LGFunction{
+        "get_or_cache": func(L *lua.LState) int {
+            url := L.CheckString(1)
+            name := L.CheckString(2)
+            folder := L.CheckString(3)
+            stuff, err := get_or_cache(url, name, folder)
+            if err == nil {
+                L.Push(lua.LString(stuff))
+                return 1
+            } else {
+                L.Push(lua.LNil)
+                L.Push(lua.LString(err.Error()))
+                return 2
+            }
+        },
+        "get_dependencies": func(L *lua.LState) int {
+            L.Push(lua_get_dep(L, deps))
+            return 1
+        },
+        "query_escape": func(L *lua.LState) int {
+            L.Push(lua.LString(url.QueryEscape(L.CheckString(1))));
+            return 1
+        },
+    })
+    L.SetGlobal("Jice", jice_tbl)
+
+    for k, v := range config.Plugins {
+        a := any_to_lua(L, v.Config)
+        // pp.Println(a)
+        L.SetGlobal("config", a)
+        // TODO: Actual url not file
+        if err := L.DoFile(v.Url); err != nil {
+            panic(err)
+        }
+        lv := L.Get(-1);
+        if tbl, ok := lv.(*lua.LTable); ok {
+            plugin := config.Plugins[k];
+            plugin.Table = tbl
+            config.Plugins[k] = plugin;
+        } else {
+            panic("plugin " + k + " didnt return a table")
+        }
+    }
+}
+
 func main() {
+    L := lua.NewState(lua.Options { SkipOpenLibs: true })
+    defer L.Close()
+    for _, pair := range []struct{ n string; f lua.LGFunction } {
+		{ lua.BaseLibName,   lua.OpenBase    },
+		{ lua.TabLibName,    lua.OpenTable   },
+		{ lua.MathLibName,   lua.OpenMath    },
+		{ lua.StringLibName, lua.OpenString  },
+		{ lua.OsLibName,     lua.OpenOs      },
+		{ lua.IoLibName,     lua.OpenIo      },
+	} {
+		if err := L.CallByParam(lua.P {
+			Fn: L.NewFunction(pair.f),
+			NRet: 0,
+			Protect: true,
+		}, lua.LString(pair.n)); err != nil {
+			panic(err)
+		}
+	}
+
     var config JiceConfig;
-    text, err := os.ReadFile("jice.toml");
+    text, err := os.ReadFile("jice.kdl");
     check(err);
-    err = toml.Unmarshal(text, &config)
+    err = kdl.Unmarshal(text, &config)
     check(err);
+    
+    config.L = L;
     if config.Package.DefaultRepo == "" {
         config.Package.DefaultRepo = "https://repo1.maven.org/maven2";
     }
@@ -611,6 +626,7 @@ func main() {
     }
     if args[0] == "build" {
         deps := get_all_deps_from_config(config);
+        init_lua(config, deps)
         thingy := make(GroupArtifactToVersionScope);
         thing(thingy, deps);
         build(config, deps, thingy);

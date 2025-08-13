@@ -1,0 +1,34 @@
+package {
+    // Looks for any .java files in the directory recursively
+    source_dir "src"
+    default_repo "repo url" // Optional. The default repo is maven
+    javac_args "args" // Optional. Extra args for javac
+}
+
+dependencies {
+    net.fabricmc.fabric-api:fabric-api "0.131.2+1.21.9"
+}
+
+repos {
+    // if it cant find this in the specified repo it will try the maven repo
+    net.fabricmc.fabric-api:fabric-api = "https://maven.fabricmc.net"
+}
+
+// Optional thing to map jars for minecraft
+//[mapping]
+//map = "url to mappings jar. must contain mappings.tiny file inside the jar"
+//intermediary = "url to intermediary jar. same as the map jar but intermediary"
+//# Repos to map
+//mapped = [
+//    "https://maven.fabricmc.net/",
+//    "https://libraries.minecraft.net/"
+//]
+
+plugins {
+    test {
+        url "url to lua file"
+        config {
+            // Config for plugin
+        }
+    }
+}
