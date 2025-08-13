@@ -9,4 +9,4 @@ libs/*
 .jice/*
 src/
 src/*
-jice.toml
+jice.kdl

@@ -573,8 +573,9 @@ func init_lua(config JiceConfig, deps []Dependency) {
         a := any_to_lua(L, v.Config)
         // pp.Println(a)
         L.SetGlobal("config", a)
-        // TODO: Actual url not file
-        if err := L.DoFile(v.Url); err != nil {
+        plugin, err := get_or_cache(v.Url, k + ".lua", "plugins")
+        check(err)
+        if err := L.DoString(string(plugin)); err != nil {
             panic(err)
         }
         lv := L.Get(-1);
