@@ -1,20 +1,22 @@
 package main
 
 import (
-    "strings"
-    "errors"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
+	"maps"
 	"net/http"
-    "net/url"
+	"net/url"
 	"os"
-    "os/exec"
-    "path/filepath"
-    "io/fs"
+	"os/exec"
+	"path/filepath"
+	"strings"
+
 	"github.com/k0kubun/pp/v3"
-    "github.com/sblinch/kdl-go"
-    "github.com/yuin/gopher-lua"
+	"github.com/sblinch/kdl-go"
+	"github.com/yuin/gopher-lua"
 )
 
 type XMLProperties map[string]string
@@ -138,6 +140,7 @@ type Dependency struct {
     Url *string
     Dependencies []Dependency
     Repo string
+    Scope *string
 }
 
 func replace_stupid_string_with_props(s string, props map[string]string) string {
@@ -198,7 +201,7 @@ func get_dep(config JiceConfig, repo string, g string, a string, v string) Proje
     check(err);
 
     props := make(map[string]string);
-    management := make(GroupArtifactToVersionScope);
+    management := make(GroupArtifactToDep);
     var parent Project;
     if project.Parent != nil {
         if strings.Contains(project.Parent.GroupId, "${")    { panic("fuck off") }
@@ -206,9 +209,7 @@ func get_dep(config JiceConfig, repo string, g string, a string, v string) Proje
         if strings.Contains(project.Parent.Version, "${")    { panic("fuck off") }
 
         parent = get_dep(config, repo, project.Parent.GroupId, project.Parent.ArtifactId, project.Parent.Version);
-        for k, v := range parent.Properties {
-            props[k] = v;
-        }
+        maps.Copy(props, parent.Properties)
 
         if project.GroupId == nil {
             project.GroupId = parent.GroupId
@@ -243,11 +244,12 @@ func get_dep(config JiceConfig, repo string, g string, a string, v string) Proje
                 GroupId: d.GroupId,
                 ArtifactId: d.ArtifactId,
             };
-            management[k] = struct { Version string; Scope *string; Repo string; Url *string } {
+            management[k] = Dependency{
+                Group: d.GroupId,
+                Artifact: d.ArtifactId,
                 Version: replace_stupid_string_with_props(d.Version, props),
                 Scope: d.Scope,
                 Repo: repo,
-                Url: nil,
             }
         }
     }
@@ -260,11 +262,12 @@ func get_dep(config JiceConfig, repo string, g string, a string, v string) Proje
             GroupId: d.GroupId,
             ArtifactId: d.ArtifactId,
         };
-        management[k] = struct { Version string; Scope *string; Repo string; Url *string }{
+        management[k] = Dependency{
+            Group: d.GroupId,
+            Artifact: d.ArtifactId,
             Version: replace_stupid_string_with_props(d.Version, props),
             Scope: d.Scope,
             Repo: repo,
-            Url: nil,
         }
     }
 
@@ -323,16 +326,22 @@ func get_all(config JiceConfig, repo string, g string, a string, v string) Depen
     return real;
 }
 
-func tree(deps []Dependency, indent int) {
-    for _, d := range deps {
-        if indent > 0 {
-            for j := 0; j < indent; j++ {
-                fmt.Print("  ")
-            }
+func tree(deps []Dependency, indent int, prefix string) {
+    for i, d := range deps {
+        last := i == len(deps) - 1
+
+        thing := "├── "
+        if last {
+            thing = "└── "
         }
-        fmt.Print(d.Group + ":" + d.Artifact + " " + d.Version)
-        fmt.Print("\n")
-        tree(d.Dependencies, indent + 1);
+        fmt.Println(prefix + thing + "\x1b[38;2;140;140;140m" + d.Group + " \x1b[0m" + d.Artifact + " \x1b[38;2;184;168;255m" + d.Version + "\x1b[0m")
+        new := prefix
+        if last {
+            new += "   "
+        } else {
+            new += "│  "
+        }
+        tree(d.Dependencies, indent + 1, new);
     }
 }
 
@@ -357,7 +366,18 @@ type CacheThing struct {
     Mapped []string `kdl:"mapped"`
 }
 
-func build(config JiceConfig, deps []Dependency, thingy GroupArtifactToVersionScope) {
+func get_source_files(config JiceConfig) ([]string, error) {
+    var javas []string;
+    err := filepath.WalkDir(config.Package.SourceDir, func(path string, d fs.DirEntry, err error) error {
+        if strings.HasSuffix(path, ".java") {
+            javas = append(javas, "./" + path)
+        }
+        return nil;
+    });
+    return javas, err
+}
+
+func build(config JiceConfig, thingy GroupArtifactToDep) {
     for k, d := range thingy {
         g := k.GroupId;
         a := k.ArtifactId;
@@ -412,13 +432,7 @@ func build(config JiceConfig, deps []Dependency, thingy GroupArtifactToVersionSc
 
     os.RemoveAll("./.jice/output")
 
-    var javas []string;
-    err := filepath.WalkDir(config.Package.SourceDir, func(path string, d fs.DirEntry, err error) error {
-        if strings.HasSuffix(path, ".java") {
-            javas = append(javas, path)
-        }
-        return nil;
-    });
+    javas, err := get_source_files(config);
     check(err);
 
     args := []string {
@@ -432,6 +446,7 @@ func build(config JiceConfig, deps []Dependency, thingy GroupArtifactToVersionSc
     }
     
     // TODO: Someone could put command args into filename and fuck shit up
+    // EDIT: Changed to have ./ infront of the files. Perhaps thats enough
     args = append(args, javas...);
 
     cmd := exec.Command("javac", args...);
@@ -470,17 +485,12 @@ func get_all_deps_from_config(config JiceConfig) []Dependency {
     return deps;
 }
 
-type GroupArtifactToVersionScope map[struct {
+type GroupArtifactToDep map[struct {
     GroupId string
     ArtifactId string
-}] struct {
-    Version string
-    Scope *string
-    Repo string
-    Url *string
-}
+}] Dependency
 
-func thing(thingy GroupArtifactToVersionScope, deps []Dependency) {
+func make_ga2dep(thingy GroupArtifactToDep, deps []Dependency) {
     for _, d := range deps {
         k := struct { GroupId string; ArtifactId string }{
             GroupId: d.Group,
@@ -488,14 +498,9 @@ func thing(thingy GroupArtifactToVersionScope, deps []Dependency) {
         };
         _, ok := thingy[k];
         if !ok {
-            thingy[k] = struct { Version string; Scope *string; Repo string; Url *string } {
-                Version: d.Version,
-                Scope: nil,
-                Repo: d.Repo,
-                Url: d.Url,
-            }
+            thingy[k] = d
         }
-        thing(thingy, d.Dependencies)
+        make_ga2dep(thingy, d.Dependencies)
     }
 }
 
@@ -628,15 +633,62 @@ func main() {
     if args[0] == "build" {
         deps := get_all_deps_from_config(config);
         init_lua(config, deps)
-        thingy := make(GroupArtifactToVersionScope);
-        thing(thingy, deps);
-        build(config, deps, thingy);
+        ga2dep := make(GroupArtifactToDep);
+        make_ga2dep(ga2dep, deps);
+        build(config, ga2dep);
         // dep := get_all(jice, "https://repo1.maven.org/maven2", "com.google.guava", "guava", "33.3.1-jre")
         // project := get_dep(jice, "https://repo1.maven.org/maven2", "com.google.errorprone", "error_prone_annotations", "2.28.0")
     } else if args[0] == "clean" {
         os.RemoveAll("./.jice")
     } else if args[0] == "tree" {
-        tree(get_all_deps_from_config(config), 0)
+        tree(get_all_deps_from_config(config), 0, "")
+    } else if args[0] == "doc" {
+        javas, err := get_source_files(config);
+        check(err);
+
+        args := []string{
+            "-d", "./.jice/doc/",
+            "-cp", "./.jice/cache/*",
+            "-private",
+        }
+        args = append(args, javas...);
+
+        cmd := exec.Command("javadoc", args...);
+        cmd.Stdout = os.Stdout;
+        cmd.Stderr = os.Stderr;
+
+        err = cmd.Run();
+        check(err);
+
+        exec.Command("xdg-open", "./.jice/doc/index.html").Start();
+    } else if args[0] == "info" {
+        pkg := args[1]
+        stuff := strings.Split(pkg, ":")
+
+        deps := get_all_deps_from_config(config)
+        ga2dep := make(GroupArtifactToDep);
+        make_ga2dep(ga2dep, deps)
+        
+        var dep *Dependency;
+        for k, d := range ga2dep {
+            if k.GroupId == stuff[0] && k.ArtifactId == stuff[1] {
+                dep = &d
+                break
+            }
+        }
+        if dep != nil {
+            if dep.Description != nil {
+                fmt.Println("Description:", *dep.Description)
+            }
+            fmt.Println("Repo:", dep.Repo)
+            fmt.Println("Version:", dep.Version)
+            if dep.Url != nil {
+                fmt.Println("Url:", *dep.Url)
+            }
+            fmt.Printf("%d dependencies\n", len(dep.Dependencies))
+        } else {
+            fmt.Println("Could not find package")
+        }
     } else {
         fmt.Println("Unknown arg: " + args[0])
     }
