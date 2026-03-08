@@ -86,5 +86,8 @@ function Plugin.before_build()
     local deps = Jice.get_dependencies()
     count = 0
     do_map(deps, {}, count_deps(deps))
+    if config.resources ~= nil and config.resources ~= "" then
+        assert(os.execute("cp -r " .. config.resources .. "/* " .. "./.jice/output/"))
+    end
 end
 return Plugin

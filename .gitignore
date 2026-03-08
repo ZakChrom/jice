@@ -11,3 +11,5 @@ src/
 src/*
 jice.kdl
 jice
+resources/
+resources/*
