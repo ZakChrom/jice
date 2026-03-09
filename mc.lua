@@ -48,8 +48,8 @@ local function do_map(deps, already_did, max_deps)
             end
             if should_really_map then
                 if file_exists("./.jice/cache/" .. path) then
-                    assert(os.execute("java -jar ./.jice/mapping/remapper.jar ./.jice/cache/" .. path .. " ./.jice/cache/" .. path .. " ./.jice/mapping/off2inter.tiny official intermediary >/dev/null"))
-                    assert(os.execute("java -jar ./.jice/mapping/remapper.jar ./.jice/cache/" .. path .. " ./.jice/cache/" .. path .. " ./.jice/mapping/inter2named.tiny intermediary named >/dev/null"))
+                    assert(os.execute("java -jar ./.jice/mapping/remapper.jar ./.jice/cache/" .. path .. " ./.jice/cache/" .. path .. " ./.jice/mapping/mappings.tiny official named >/dev/null"))
+                    -- assert(os.execute("java -jar ./.jice/mapping/remapper.jar ./.jice/cache/" .. path .. " ./.jice/cache/" .. path .. " ./.jice/mapping/inter2named.tiny intermediary named >/dev/null"))
                 end
             end
             table.insert(already_did, path)
@@ -76,8 +76,8 @@ function Plugin.before_build()
     end
     assert(Jice.get_or_cache(config.map, "mappings.jar", "mapping"))
     assert(Jice.get_or_cache(config.intermediary, "intermediary.jar", "mapping"))
-    assert(os.execute("cd ./.jice/mapping && unzip -qjo mappings.jar && mv mappings.tiny inter2named.tiny"));
-    assert(os.execute("cd ./.jice/mapping && unzip -qjo intermediary.jar && mv mappings.tiny off2inter.tiny"));
+    assert(os.execute("cd ./.jice/mapping && unzip -qjo mappings.jar"));
+    -- assert(os.execute("cd ./.jice/mapping && unzip -qjo intermediary.jar && mv mappings.tiny off2inter.tiny"));
     assert(Jice.get_or_cache(
         "https://maven.fabricmc.net/net/fabricmc/tiny-remapper/0.9.0/tiny-remapper-0.9.0-fat.jar",
         "remapper.jar",
@@ -86,9 +86,5 @@ function Plugin.before_build()
     local deps = Jice.get_dependencies()
     count = 0
     do_map(deps, {}, count_deps(deps))
-    assert(os.execute("mkdir -p ./.jice/output"));
-    if config.resources ~= nil and config.resources ~= "" then
-        assert(os.execute("cp -r " .. config.resources .. "/* " .. "./.jice/output/"))
-    end
 end
 return Plugin

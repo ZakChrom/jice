@@ -351,6 +351,7 @@ type JiceConfig struct {
         SourceDir string `kdl:"source_dir"`
         JavacArgs *[]string `kdl:"javac_args,omitempty"`
         DefaultRepo string `kdl:"default_repo,omitempty"`
+        Resources *[]string `kdl:"resources,omitempty"`
     } `kdl:"package"`
     Dependencies map[string]string `kdl:"dependencies"`
     Repos map[string]string `kdl:"repos"`
@@ -455,6 +456,30 @@ func build(config JiceConfig, thingy GroupArtifactToDep) {
 
     err = cmd.Run();
     check(err);
+
+    args = []string{
+        "cvf",
+        "./.jice/build.jar",
+        "-C",
+        "./.jice/output/",
+        ".",
+    };
+
+    if config.Package.Resources != nil {
+        for _, d := range(*config.Package.Resources) {
+            d, err = filepath.Abs(d)
+            check(err);
+            if d == "/" || d == "." || d == "" || d == "./" {
+                panic("no")
+            }
+            args = append(args, "-C", d, ".")
+        }
+    }
+
+    cmd = exec.Command("jar", args...)
+    cmd.Stderr = os.Stderr;
+    err = cmd.Run()
+    check(err);
 }
 
 func get_all_deps_from_config(config JiceConfig) []Dependency {
@@ -543,6 +568,26 @@ func lua_get_dep(L *lua.LState, deps []Dependency) *lua.LTable {
         tbl.RawSetInt(i + 1, any_to_lua(L, thing))
     }
     return tbl
+}
+
+func cppy_file(src string, dst string) {
+    sourceFileStat, err := os.Stat(src)
+    check(err);
+
+    if !sourceFileStat.Mode().IsRegular() {
+        panic(fmt.Errorf("%s is not a regular file", src))
+    }
+
+    source, err := os.Open(src)
+    check(err);
+    defer source.Close()
+
+    destination, err := os.Create(dst)
+    check(err);
+    defer destination.Close()
+
+    _, err = io.Copy(destination, source)
+    check(err);
 }
 
 func init_lua(config JiceConfig, deps []Dependency) {
