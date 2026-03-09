@@ -17,7 +17,7 @@ local function do_map(deps, already_did, max_deps)
     end
     print(extra .. "\27[9999DMapping " .. tostring(count) .. "/" .. tostring(max_deps) .. "...") -- TODO: This doesnt actually show max deps since it counts same ones multible times
     for _, d in pairs(deps) do
-        local should_map = false
+        local should_map = d.repo == "from extra deps"
         for r, _ in pairs(config.mapped) do -- TODO: Stupid kdl
             local a = r;
             local b = d.repo;

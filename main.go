@@ -578,8 +578,17 @@ func init_lua(config JiceConfig, deps []Dependency) {
         a := any_to_lua(L, v.Config)
         // pp.Println(a)
         L.SetGlobal("config", a)
-        plugin, err := get_or_cache(v.Url, k + ".lua", "plugins")
-        check(err)
+        var plugin []byte;
+        if strings.HasPrefix(v.Url, "file://") {
+            thing, _ := strings.CutPrefix(v.Url, "file://");
+            contents, err := os.ReadFile(thing)
+            check(err);
+            plugin = contents
+        } else {
+            contents, err := get_or_cache(v.Url, k + ".lua", "plugins")
+            plugin = contents
+            check(err)
+        }
         if err := L.DoString(string(plugin)); err != nil {
             panic(err)
         }
