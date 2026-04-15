@@ -1,7 +1,7 @@
 package {
-    // Looks for any .java files in the directory recursively
+    // Array of paths. Looks for any .java files in the directory recursively
     source_dir "src"
-    default_repo "repo url" // Optional. The default repo is maven
+    default_repo "https://..." // Optional. The default repo is maven
     javac_args "args" // Optional. Extra args for javac
     resources "resources" // Optional. Extra files to put into the jar
 }
@@ -16,19 +16,9 @@ dependencies {
 }
 
 repos {
-    // if it cant find this in the specified repo it will try the maven repo
+    // if it cant find this in the specified repo it will try the default repo
     net.fabricmc.fabric-api:fabric-api = "https://maven.fabricmc.net"
 }
-
-// Optional thing to map jars for minecraft
-//[mapping]
-//map = "url to mappings jar. must contain mappings.tiny file inside the jar"
-//intermediary = "url to intermediary jar. same as the map jar but intermediary"
-//# Repos to map
-//mapped = [
-//    "https://maven.fabricmc.net/",
-//    "https://libraries.minecraft.net/"
-//]
 
 plugins {
     test {
@@ -36,5 +26,27 @@ plugins {
         config {
             // Config for plugin
         }
+    }
+
+    // Example mc plugin config
+    mc {
+        url "https://raw.githubusercontent.com/ZakChrom/jice/refs/heads/master/mc.lua"
+        config {
+            map "https://maven.fabricmc.net/net/fabricmc/yarn/1.21.11%2Bbuild.4/yarn-1.21.11%2Bbuild.4.jar"
+            intermediary "https://maven.fabricmc.net/net/fabricmc/intermediary/1.21.11/intermediary-1.21.11.jar"
+            mapped {
+                "https://maven.fabricmc.net/"
+                "https://libraries.minecraft.net/"
+            }
+        }
+    }
+}
+
+// Optional. You can specify variants in the cli with --variant VARIANT or -v VARIANT
+// The config will be applied on top of the main config if the variant matches
+// If a field is an array they are appended to
+variants {
+    "VARIANT" {
+        // Same config as before
     }
 }

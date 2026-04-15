@@ -27,7 +27,7 @@ local function do_map(deps, already_did, max_deps)
             if string.sub(b, string.len(b), string.len(b)) == "/" then
                 b = string.sub(b, 1, string.len(b) - 1);
             end
-            if a == b or b == "from extra deps" then
+            if a == b then
                 should_map = true
                 break
             end
@@ -51,12 +51,14 @@ local function do_map(deps, already_did, max_deps)
                     assert(os.execute("java -jar ./.jice/mapping/remapper.jar ./.jice/cache/" .. path .. " ./.jice/cache/" .. path .. " ./.jice/mapping/mappings.tiny official named >/dev/null"))
                     -- assert(os.execute("java -jar ./.jice/mapping/remapper.jar ./.jice/cache/" .. path .. " ./.jice/cache/" .. path .. " ./.jice/mapping/inter2named.tiny intermediary named >/dev/null"))
                 end
+                table.insert(already_did, path)
             end
-            table.insert(already_did, path)
         end
         count = count + 1;
         do_map(d.dependencies, already_did, max_deps)
     end
+
+    return already_did
 end
 
 local function count_deps(deps)
@@ -83,8 +85,24 @@ function Plugin.before_build()
         "remapper.jar",
         "mapping"
     ))
+
+    local f = io.open("./.jice/mapping/cache.kdl")
+    if f ~= nil then
+        f:close()
+    else
+        Jice.write_kdl("./.jice/mapping/cache.kdl", {
+            cache = {}
+        })
+    end
+
     local deps = Jice.get_dependencies()
     count = 0
-    do_map(deps, {}, count_deps(deps))
+    local stuff = do_map(deps, Jice.read_kdl("./.jice/mapping/cache.kdl").cache, count_deps(deps))
+
+    Jice.write_kdl("./.jice/mapping/cache.kdl", {
+        cache = stuff
+    })
+
+    -- assert(os.execute("jar cfm .jice/build.jar MANIFEST.MF"))
 end
 return Plugin

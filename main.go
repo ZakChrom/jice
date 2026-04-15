@@ -12,6 +12,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/k0kubun/pp/v3"
@@ -348,7 +350,7 @@ func tree(deps []Dependency, indent int, prefix string) {
 type JiceConfig struct {
     L *lua.LState
     Package struct {
-        SourceDir string `kdl:"source_dir"`
+        SourceDir []string `kdl:"source_dir"`
         JavacArgs *[]string `kdl:"javac_args,omitempty"`
         DefaultRepo string `kdl:"default_repo,omitempty"`
         Resources *[]string `kdl:"resources,omitempty"`
@@ -361,6 +363,7 @@ type JiceConfig struct {
         Config map[string]any `kdl:"config"`
         Table *lua.LTable
     } `kdl:"plugins"`
+    Variants map[string]JiceConfig `kdl:variants`
 }
 
 type CacheThing struct {
@@ -369,13 +372,18 @@ type CacheThing struct {
 
 func get_source_files(config JiceConfig) ([]string, error) {
     var javas []string;
-    err := filepath.WalkDir(config.Package.SourceDir, func(path string, d fs.DirEntry, err error) error {
-        if strings.HasSuffix(path, ".java") {
-            javas = append(javas, "./" + path)
+    for i := range config.Package.SourceDir {
+        err := filepath.WalkDir(config.Package.SourceDir[i], func(path string, d fs.DirEntry, err error) error {
+            if strings.HasSuffix(path, ".java") {
+                javas = append(javas, "./" + path)
+            }
+            return nil;
+        });
+        if err != nil {
+            return []string{}, nil
         }
-        return nil;
-    });
-    return javas, err
+    }
+    return javas, nil
 }
 
 func build(config JiceConfig, thingy GroupArtifactToDep) {
@@ -526,27 +534,115 @@ func make_ga2dep(thingy GroupArtifactToDep, deps []Dependency) {
             thingy[k] = d
         }
         make_ga2dep(thingy, d.Dependencies)
-    }
+    }   
 }
 
-func any_to_lua(L *lua.LState, m map[string]any) *lua.LTable {
+func map_value_to_any[K comparable, V any](m map[K]V) map[K]any {
+    out := make(map[K]any, len(m))
+    for k, v := range m {
+        out[k] = v
+    }
+    return out
+}
+
+func any_to_lua2(L *lua.LState, m map[float64]any) *lua.LTable {
     tbl := L.NewTable()
     for k, v := range m {
+        k2 := int(k)
         switch val := v.(type) {
-            case string:         tbl.RawSetString(k, lua.LString(val))
-            case *string:        tbl.RawSetString(k, lua.LString(*val))
-            case int:            tbl.RawSetString(k, lua.LNumber(val))
-            case float64:        tbl.RawSetString(k, lua.LNumber(val))
-            case bool:           tbl.RawSetString(k, lua.LBool(val))
-            case map[string]any: tbl.RawSetString(k, any_to_lua(L, val))
-            case nil:            tbl.RawSetString(k, lua.LNil)
-            case lua.LValue:     tbl.RawSetString(k, val)
+            case string:         {
+                f, err := strconv.ParseFloat(val, 64)
+                if err != nil {
+                    tbl.RawSetInt(k2, lua.LString(val))
+                } else {
+                    tbl.RawSetInt(k2, lua.LNumber(f))
+                }
+            }
+            case *string:            tbl.RawSetInt(k2, lua.LString(*val))
+            case int:                tbl.RawSetInt(k2, lua.LNumber(val))
+            case float64:            tbl.RawSetInt(k2, lua.LNumber(val))
+            case bool:               tbl.RawSetInt(k2, lua.LBool(val))
+            case map[string]string:  tbl.RawSetInt(k2, any_to_lua(L, map_value_to_any(val)))
+            case map[string]int:     tbl.RawSetInt(k2, any_to_lua(L, map_value_to_any(val)))
+            case map[string]float64: tbl.RawSetInt(k2, any_to_lua(L, map_value_to_any(val)))
+            case map[string]any:     tbl.RawSetInt(k2, any_to_lua(L, val))
+            case nil:                tbl.RawSetInt(k2, lua.LNil)
+            case lua.LValue:         tbl.RawSetInt(k2, val)
+            case map[float64]string: tbl.RawSetInt(k2, any_to_lua2(L, map_value_to_any(val)))
+            case map[float64]int:    tbl.RawSetInt(k2, any_to_lua2(L, map_value_to_any(val)))
+            case map[float64]float64:tbl.RawSetInt(k2, any_to_lua2(L, map_value_to_any(val)))
+            case map[float64]any:    tbl.RawSetInt(k2, any_to_lua2(L, val))
             default:
                 pp.Println(val)
                 panic("Unknown type")
         }
     }
     return tbl
+}
+
+func any_to_lua(L *lua.LState, m map[string]any) *lua.LTable {
+    tbl := L.NewTable()
+    for k, v := range m {
+        switch val := v.(type) {
+            case string:         {
+                f, err := strconv.ParseFloat(val, 64)
+                if err != nil {
+                    tbl.RawSetString(k, lua.LString(val))
+                } else {
+                    tbl.RawSetString(k, lua.LNumber(f))
+                }
+            }
+            case *string:            tbl.RawSetString(k, lua.LString(*val))
+            case int:                tbl.RawSetString(k, lua.LNumber(val))
+            case float64:            tbl.RawSetString(k, lua.LNumber(val))
+            case bool:               tbl.RawSetString(k, lua.LBool(val))
+            case map[string]string:  tbl.RawSetString(k, any_to_lua(L, map_value_to_any(val)))
+            case map[string]int:     tbl.RawSetString(k, any_to_lua(L, map_value_to_any(val)))
+            case map[string]float64: tbl.RawSetString(k, any_to_lua(L, map_value_to_any(val)))
+            case map[string]any:     tbl.RawSetString(k, any_to_lua(L, val))
+            case nil:                tbl.RawSetString(k, lua.LNil)
+            case lua.LValue:         tbl.RawSetString(k, val)
+            case map[float64]string: tbl.RawSetString(k, any_to_lua2(L, map_value_to_any(val)))
+            case map[float64]int:    tbl.RawSetString(k, any_to_lua2(L, map_value_to_any(val)))
+            case map[float64]float64:tbl.RawSetString(k, any_to_lua2(L, map_value_to_any(val)))
+            case map[float64]any:    tbl.RawSetString(k, any_to_lua2(L, val))
+            default:
+                pp.Println(val)
+                panic("Unknown type")
+        }
+    }
+    return tbl
+}
+
+func lua_to_any(v lua.LValue) any {
+    if v.Type() == lua.LTBool {
+        return bool(lua.LVAsBool(v))
+    }
+    if v.Type() == lua.LTNil {
+        return nil
+    }
+    if v.Type() == lua.LTNumber {
+        return float64(lua.LVAsNumber(v))
+    }
+    if v.Type() == lua.LTString {
+        return string(lua.LVAsString(v))
+    }
+    if v.Type() == lua.LTTable {
+        t, ok := v.(*lua.LTable)
+        if !ok { panic("") }
+
+        m := map[any]any{};
+        t.ForEach(func(key lua.LValue, value lua.LValue) {
+            k := lua_to_any(key)
+            v := lua_to_any(value)
+            m[k] = v;
+        })
+
+        return m;
+    }
+
+    pp.Println(v)
+    panic("Unknown type")
 }
 
 func lua_get_dep(L *lua.LState, deps []Dependency) *lua.LTable {
@@ -616,6 +712,43 @@ func init_lua(config JiceConfig, deps []Dependency) {
             L.Push(lua.LString(url.QueryEscape(L.CheckString(1))));
             return 1
         },
+        "write_kdl": func(L *lua.LState) int {
+            file := L.CheckString(1)
+            thing := lua_to_any(L.CheckAny(2))
+            f, err := os.OpenFile(file, os.O_WRONLY | os.O_CREATE, 0666)
+            check(err)
+
+            kdl, err := kdl.Marshal(thing)
+            check(err)
+
+            _, err = f.Write(kdl)
+            check(err)
+
+            check(f.Close())
+            return 0;
+        },
+        "read_kdl": func(l *lua.LState) int {
+            file := L.CheckString(1)
+            f, err := os.Open(file)
+            check(err)
+
+            data := make([]byte, 1024 * 1024)
+            num, err := f.Read(data)
+            check(err)
+
+            var value map[string]map[float64]string;
+            check(kdl.Unmarshal(data[:num], &value))
+
+            stupid := make(map[string]any)
+            for k, v := range value {
+                stupid[k] = v
+            }
+
+            tbl := any_to_lua(L, stupid)
+
+            L.Push(tbl)
+            return 1;
+        },
     })
     L.SetGlobal("Jice", jice_tbl)
 
@@ -648,6 +781,68 @@ func init_lua(config JiceConfig, deps []Dependency) {
     }
 }
 
+func apply_config(config JiceConfig, second JiceConfig) JiceConfig {
+    /*
+    Package struct {
+        SourceDir []string `kdl:"source_dir"`
+        JavacArgs *[]string `kdl:"javac_args,omitempty"`
+        DefaultRepo string `kdl:"default_repo,omitempty"`
+        Resources *[]string `kdl:"resources,omitempty"`
+    } `kdl:"package"`
+    Dependencies map[string]string `kdl:"dependencies"`
+    Repos map[string]string `kdl:"repos"`
+    Extra map[string]string `kdl:"extra"`
+    Plugins map[string]struct {
+        Url string `kdl:"url"`
+        Config map[string]any `kdl:"config"`
+        Table *lua.LTable
+    } `kdl:"plugins"`
+    Variants map[string]JiceConfig `kdl:variants`
+    */
+    config.Package.SourceDir = append(config.Package.SourceDir, second.Package.SourceDir...)
+    config.Package.JavacArgs = append_optional_array_to_optional_array(config.Package.JavacArgs, second.Package.JavacArgs)
+    config.Package.Resources = append_optional_array_to_optional_array(config.Package.Resources, second.Package.Resources)
+    config.Package.DefaultRepo = second.Package.DefaultRepo
+    
+    if config.Dependencies == nil { config.Dependencies = make(map[string]string) }
+    for k, v := range second.Dependencies {
+        config.Dependencies[k] = v
+    }
+
+    if config.Repos == nil { config.Repos = make(map[string]string) }
+    for k, v := range second.Repos {
+        config.Repos[k] = v
+    }
+
+    if config.Extra == nil { config.Extra = make(map[string]string) }
+    for k, v := range second.Extra {
+        config.Extra[k] = v
+    }
+
+    for k, plugin := range second.Plugins {
+        config_plugin, ok := config.Plugins[k]
+        if !ok {
+            config.Plugins[k] = plugin
+        } else {
+            if plugin.Url != "" {
+                config_plugin.Url = plugin.Url
+            }
+            for ck, cv := range plugin.Config {
+                config_plugin.Config[ck] = cv
+            }
+            config.Plugins[k] = config_plugin
+        }
+    }
+    return config
+}
+
+func append_optional_array_to_optional_array[T any](a *[]T, b *[]T) *[]T {
+    if a == nil { return b }
+    if b == nil { return a }
+    ab := append(*a, *b...)
+    return &ab
+}
+
 func main() {
     L := lua.NewState(lua.Options { SkipOpenLibs: true })
     defer L.Close()
@@ -673,17 +868,36 @@ func main() {
     check(err);
     err = kdl.Unmarshal(text, &config)
     check(err);
-    
-    config.L = L;
-    if config.Package.DefaultRepo == "" {
-        config.Package.DefaultRepo = "https://repo1.maven.org/maven2";
-    }
 
     args := os.Args[1:];
     if len(args) == 0 {
         fmt.Println("no args");
         return;
     }
+    variants := []string{}
+    i := 0
+    for true {
+        if i >= len(args) { break }
+        if args[i] == "-v" || args[i] == "--variant" {
+            variants = append(variants, args[i + 1])
+            args = slices.Delete(args, i, i + 2)
+        }
+        i += 1
+    }
+
+    for _, v := range variants {
+        for k, c := range config.Variants {
+            if v == k {
+                config = apply_config(config, c)
+            }
+        }
+    }
+
+    config.L = L;
+    if config.Package.DefaultRepo == "" {
+        config.Package.DefaultRepo = "https://repo1.maven.org/maven2";
+    }
+
     if args[0] == "build" {
         deps := get_all_deps_from_config(config);
         init_lua(config, deps)
