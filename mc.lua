@@ -17,7 +17,7 @@ local function do_map(deps, already_did, max_deps)
     end
     print(extra .. "\27[9999DMapping " .. tostring(count) .. "/" .. tostring(max_deps) .. "...") -- TODO: This doesnt actually show max deps since it counts same ones multible times
     for _, d in pairs(deps) do
-        local should_map = d.repo == "from extra deps"
+        local should_map = d.repo == "mc plugin minecraft"
         for r, _ in pairs(config.mapped) do -- TODO: Stupid kdl
             local a = r;
             local b = d.repo;
@@ -70,6 +70,30 @@ local function count_deps(deps)
 end
 
 function Plugin.before_build()
+    if config.version == "" or config.version == nil then
+        error("Missing `version` field in config")
+    end
+    assert(Jice.get_or_cache("https://piston-meta.mojang.com/mc/game/version_manifest_v2.json", "versions.json", "mapping"))
+
+    local manifest = assert(Jice.read_json("./.jice/mapping/versions.json"))
+    local found = nil
+    for i = 0, #manifest.versions do
+        local v = manifest.versions[i]
+        if v == nil then break end
+
+        if v.id == config.version then
+            found = v
+            break
+        end
+    end
+    if found == nil then
+        error("Couldnt find version `" .. config.version .. "`")
+    end
+
+    assert(Jice.get_or_cache(found.url, "version.json", "mapping"))
+    local version = assert(Jice.read_json("./.jice/mapping/version.json"))
+    assert(Jice.get_or_cache(version.downloads.client.url, "net.minecraft:client-" .. config.version .. ".jar", "cache"))
+
     if config.map == "" or config.map == nil then
         error("Missing map url")
     end
@@ -90,16 +114,24 @@ function Plugin.before_build()
     if f ~= nil then
         f:close()
     else
-        Jice.write_kdl("./.jice/mapping/cache.kdl", {
+        Jice.write_json("./.jice/mapping/cache.json", {
             cache = {}
         })
     end
 
     local deps = Jice.get_dependencies()
+    table.insert(deps, {
+        group = "net.minecraft",
+        artifact = "client",
+        version = config.version,
+        name = "client",
+        repo = "mc plugin minecraft",
+        dependencies = {}
+    })
     count = 0
-    local stuff = do_map(deps, Jice.read_kdl("./.jice/mapping/cache.kdl").cache, count_deps(deps))
+    local stuff = do_map(deps, Jice.read_json("./.jice/mapping/cache.json").cache, count_deps(deps))
 
-    Jice.write_kdl("./.jice/mapping/cache.kdl", {
+    Jice.write_json("./.jice/mapping/cache.json", {
         cache = stuff
     })
 

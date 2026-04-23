@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/xml"
+    "encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -585,12 +586,16 @@ func any_to_lua(L *lua.LState, m map[string]any) *lua.LTable {
     for k, v := range m {
         switch val := v.(type) {
             case string:         {
-                f, err := strconv.ParseFloat(val, 64)
-                if err != nil {
+                // TODO: In kdl or atleast in this go implementation arrays arent a thing
+                // So kdl parser converts indexes to strings so i convert back
+                // Commented because json has an actually good array support which fucks up here
+
+                // f, err := strconv.ParseFloat(val, 64)
+                // if err != nil {
                     tbl.RawSetString(k, lua.LString(val))
-                } else {
-                    tbl.RawSetString(k, lua.LNumber(f))
-                }
+                // } else {
+                    // tbl.RawSetString(k, lua.LNumber(f))
+                // }
             }
             case *string:            tbl.RawSetString(k, lua.LString(*val))
             case int:                tbl.RawSetString(k, lua.LNumber(val))
@@ -606,6 +611,12 @@ func any_to_lua(L *lua.LState, m map[string]any) *lua.LTable {
             case map[float64]int:    tbl.RawSetString(k, any_to_lua2(L, map_value_to_any(val)))
             case map[float64]float64:tbl.RawSetString(k, any_to_lua2(L, map_value_to_any(val)))
             case map[float64]any:    tbl.RawSetString(k, any_to_lua2(L, val))
+            case []any:
+                thing := make(map[float64]any)
+                for i, v := range val {
+                    thing[float64(i)] = v
+                }
+                tbl.RawSetString(k, any_to_lua2(L, thing))
             default:
                 pp.Println(val)
                 panic("Unknown type")
@@ -631,17 +642,24 @@ func lua_to_any(v lua.LValue) any {
         t, ok := v.(*lua.LTable)
         if !ok { panic("") }
 
-        m := map[any]any{};
-        t.ForEach(func(key lua.LValue, value lua.LValue) {
-            k := lua_to_any(key)
-            v := lua_to_any(value)
-            m[k] = v;
-        })
-
-        return m;
+        if t.MaxN() > 0 {
+            m := map[int]any{};
+            t.ForEach(func(key lua.LValue, value lua.LValue) {
+                v := lua_to_any(value)
+                m[int(lua.LVAsNumber(key))] = v;
+            })
+            return m;
+        } else {
+            m := map[string]any{};
+            t.ForEach(func(key lua.LValue, value lua.LValue) {
+                v := lua_to_any(value)
+                m[lua.LVAsString(key)] = v;
+            })
+            return m;
+        }
     }
 
-    pp.Println(v)
+    pp.Println(v.Type())
     panic("Unknown type")
 }
 
@@ -712,13 +730,71 @@ func init_lua(config JiceConfig, deps []Dependency) {
             L.Push(lua.LString(url.QueryEscape(L.CheckString(1))));
             return 1
         },
-        "write_kdl": func(L *lua.LState) int {
+        // "add_dependency": func(l *lua.LState) int {
+        //     tbl := L.CheckTable(1)
+            
+        //     group := tbl.RawGetString("group")
+        //     if group == lua.LNil {
+        //         L.ArgError(1, "group field is nil")
+        //     }
+            
+        //     artifact := tbl.RawGetString("artifact")
+        //     if artifact == lua.LNil {
+        //         L.ArgError(1, "artifact field is nil")
+        //     }
+            
+        //     version := tbl.RawGetString("version")
+        //     if version == lua.LNil {
+        //         L.ArgError(1, "version field is nil")
+        //     }
+            
+        //     name := tbl.RawGetString("name")
+        //     if name == lua.LNil {
+        //         L.ArgError(1, "name field is nil")
+        //     }
+
+        //     description := tbl.RawGetString("description")
+        //     var description_real *string = nil
+        //     if description.Type() == lua.LTString {
+        //         v := lua.LVAsString(description)
+        //         description_real = &v
+        //     }
+        //     url := tbl.RawGetString("url")
+        //     var url_real *string = nil
+        //     if url.Type() == lua.LTString {
+        //         v := lua.LVAsString(url)
+        //         url_real = &v
+        //     }
+            
+        //     repo := tbl.RawGetString("repo")
+        //     if repo == lua.LNil {
+        //         L.ArgError(1, "repo field is nil")
+        //     }
+        //     scope := "compile"
+
+        //     *deps = append(*deps, Dependency{
+        //         Group: lua.LVAsString(group),
+        //         Artifact: lua.LVAsString(artifact),
+        //         Version: lua.LVAsString(version),
+        //         Name: lua.LVAsString(name),
+        //         Description: description_real,
+        //         Url: url_real,
+        //         Dependencies: []Dependency{},
+        //         Repo: lua.LVAsString(repo),
+        //         Scope: &scope,
+        //     })
+        //     return 0;
+        // },
+        "write_json": func(L *lua.LState) int {
             file := L.CheckString(1)
             thing := lua_to_any(L.CheckAny(2))
-            f, err := os.OpenFile(file, os.O_WRONLY | os.O_CREATE, 0666)
+            f, err := os.OpenFile(file, os.O_WRONLY | os.O_CREATE | os.O_TRUNC, 0666)
             check(err)
 
-            kdl, err := kdl.Marshal(thing)
+            thing2, ok := thing.(map[string]any)
+            if !ok { panic("thing2") }
+
+            kdl, err := json.Marshal(thing2)
             check(err)
 
             _, err = f.Write(kdl)
@@ -727,27 +803,55 @@ func init_lua(config JiceConfig, deps []Dependency) {
             check(f.Close())
             return 0;
         },
-        "read_kdl": func(l *lua.LState) int {
+        // "read_kdl": func(l *lua.LState) int {
+        //     file := L.CheckString(1)
+        //     f, err := os.Open(file)
+        //     check(err)
+
+        //     stat, err := f.Stat()
+        //     check(err)
+
+        //     data := make([]byte, stat.Size())
+        //     num, err := f.Read(data)
+        //     check(err)
+
+        //     var value map[string]map[float64]string;
+        //     check(kdl.Unmarshal(data[:num], &value))
+
+        //     stupid := make(map[string]any)
+        //     for k, v := range value {
+        //         stupid[k] = v
+        //     }
+
+        //     tbl := any_to_lua(L, stupid)
+
+        //     L.Push(tbl)
+        //     return 1;
+        // },
+        "read_json": func(l *lua.LState) int {
             file := L.CheckString(1)
             f, err := os.Open(file)
             check(err)
 
-            data := make([]byte, 1024 * 1024)
+            stat, err := f.Stat()
+            check(err)
+
+            data := make([]byte, stat.Size())
             num, err := f.Read(data)
             check(err)
 
-            var value map[string]map[float64]string;
-            check(kdl.Unmarshal(data[:num], &value))
+            var value map[string]any;
+            check(json.Unmarshal(data[:num], &value))
 
-            stupid := make(map[string]any)
-            for k, v := range value {
-                stupid[k] = v
-            }
-
-            tbl := any_to_lua(L, stupid)
+            tbl := any_to_lua(L, value)
 
             L.Push(tbl)
             return 1;
+        },
+        "pretty_print": func(l *lua.LState) int {
+            thing := L.CheckAny(1)
+            pp.Println(thing)
+            return 0;
         },
     })
     L.SetGlobal("Jice", jice_tbl)
