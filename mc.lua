@@ -92,7 +92,7 @@ function Plugin.before_build()
 
     assert(Jice.get_or_cache(found.url, "version.json", "mapping"))
     local version = assert(Jice.read_json("./.jice/mapping/version.json"))
-    assert(Jice.get_or_cache(version.downloads.client.url, "net.minecraft:client-" .. config.version .. ".jar", "cache"))
+    assert(Jice.get_or_cache(version.downloads.client.url, "net.minecraft-client-" .. config.version .. ".jar", "cache"))
 
     if config.map == "" or config.map == nil then
         error("Missing map url")
@@ -134,7 +134,19 @@ function Plugin.before_build()
     Jice.write_json("./.jice/mapping/cache.json", {
         cache = stuff
     })
+end
 
-    -- assert(os.execute("jar cfm .jice/build.jar MANIFEST.MF"))
+function Plugin.after_build()
+    local temp = os.tmpname()
+    local file = io.open(temp, "w")
+    assert(file ~= nil)
+    file:write("Fabric-Jar-Type: classes\
+Fabric-Loom-Mixin-Remap-Type: mixin\
+Fabric-Minecraft-Version: " .. config.version .. "\
+Fabric-Mixin-Group: net.fabricmc\
+Fabric-Mapping-Namespace: intermediary")
+    file:close()
+    assert(os.execute("jar ufm ./.jice/build.jar " .. temp))
+    assert(os.execute("java -jar ./.jice/mapping/remapper.jar ./.jice/build.jar ./.jice/build.jar ./.jice/mapping/mappings.tiny named intermediary >/dev/null"))
 end
 return Plugin

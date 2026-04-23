@@ -441,6 +441,7 @@ func build(config JiceConfig, thingy GroupArtifactToDep) {
     }
 
     os.RemoveAll("./.jice/output")
+    os.Remove("./.jice/build.jar")
 
     javas, err := get_source_files(config);
     check(err);
@@ -489,6 +490,21 @@ func build(config JiceConfig, thingy GroupArtifactToDep) {
     cmd.Stderr = os.Stderr;
     err = cmd.Run()
     check(err);
+
+    for k, p := range config.Plugins {
+        lv := config.L.GetTable(p.Table, lua.LString("after_build"));
+        if fun, ok := lv.(*lua.LFunction); ok {
+            fmt.Println("Running plugin " + k + " after_build")
+            err := config.L.CallByParam(lua.P {
+                Fn: fun,
+                NRet: 0,
+                Protect: true,
+            })
+            if err != nil {
+                panic("lua error in plugin " + k + ": " + err.Error())
+            }
+        }
+    }
 }
 
 func get_all_deps_from_config(config JiceConfig) []Dependency {
