@@ -32,13 +32,8 @@ plugins {
     mc {
         url "https://raw.githubusercontent.com/ZakChrom/jice/refs/heads/master/mc.lua"
         config {
+            modid "modid"
             version "1.21.11"
-            map "https://maven.fabricmc.net/net/fabricmc/yarn/1.21.11%2Bbuild.4/yarn-1.21.11%2Bbuild.4.jar"
-            intermediary "https://maven.fabricmc.net/net/fabricmc/intermediary/1.21.11/intermediary-1.21.11.jar"
-            mapped {
-                "https://maven.fabricmc.net/"
-                "https://libraries.minecraft.net/"
-            }
         }
     }
 }
