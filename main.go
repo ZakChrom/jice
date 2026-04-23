@@ -14,7 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
-	"strconv"
+	// "strconv"
 	"strings"
 
 	"github.com/k0kubun/pp/v3"
@@ -563,17 +563,17 @@ func map_value_to_any[K comparable, V any](m map[K]V) map[K]any {
 }
 
 func any_to_lua2(L *lua.LState, m map[float64]any) *lua.LTable {
-    tbl := L.NewTable()
+    tbl := L.CreateTable(len(m), 0)
     for k, v := range m {
         k2 := int(k)
         switch val := v.(type) {
             case string:         {
-                f, err := strconv.ParseFloat(val, 64)
-                if err != nil {
+                // f, err := strconv.ParseFloat(val, 64)
+                // if err != nil {
                     tbl.RawSetInt(k2, lua.LString(val))
-                } else {
-                    tbl.RawSetInt(k2, lua.LNumber(f))
-                }
+                // } else {
+                    // tbl.RawSetInt(k2, lua.LNumber(f))
+                // }
             }
             case *string:            tbl.RawSetInt(k2, lua.LString(*val))
             case int:                tbl.RawSetInt(k2, lua.LNumber(val))
@@ -863,6 +863,42 @@ func init_lua(config JiceConfig, deps []Dependency) {
 
             L.Push(tbl)
             return 1;
+        },
+        // Dumbass xml cant unmarshal into map[string]any so specialize it for now ig
+        "get_yarn_metadata_xml_versions": func(l *lua.LState) int {
+            file := L.CheckString(1)
+            f, err := os.Open(file)
+            check(err)
+
+            stat, err := f.Stat()
+            check(err)
+
+            data := make([]byte, stat.Size())
+            num, err := f.Read(data)
+            check(err)
+
+            type Metadata struct {
+                GroupId string `xml:"groupId"`
+                ArtifactId string `xml:"artifactId"`
+                Versioning struct {
+                    Latest string `xml:"latest"`
+                    Release string `xml:"release"`
+                    Versions []string `xml:"versions>version"`
+                } `xml:"versioning"`
+            };
+            var value Metadata
+            check(xml.Unmarshal(data[:num], &value))
+
+            fun := L.CheckFunction(2)
+            for _, v := range value.Versioning.Versions {
+                check(L.CallByParam(lua.P{
+                    Fn: fun,
+                    NRet: 0,
+                    Protect: true,
+                }, lua.LString(v)))
+            }
+
+            return 0;
         },
         "pretty_print": func(l *lua.LState) int {
             thing := L.CheckAny(1)

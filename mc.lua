@@ -94,14 +94,46 @@ function Plugin.before_build()
     local version = assert(Jice.read_json("./.jice/mapping/version.json"))
     assert(Jice.get_or_cache(version.downloads.client.url, "net.minecraft-client-" .. config.version .. ".jar", "cache"))
 
-    if config.map == "" or config.map == nil then
-        error("Missing map url")
+    assert(Jice.get_or_cache("https://maven.fabricmc.net/net/fabricmc/yarn/maven-metadata.xml", "metadata.xml", "mapping"))
+    
+    local stuff = {}
+
+    Jice.get_yarn_metadata_xml_versions("./.jice/mapping/metadata.xml", function (v)
+        local split = {}
+        for part in string.gmatch(v, "([^+]+)") do
+            table.insert(split, part)
+        end
+        if split[2] == nil then return end
+
+        local build = {}
+        for part in string.gmatch(split[2], "([^%.]+)") do
+            table.insert(build, part)
+        end
+
+        if build[1] ~= "build" then return end
+        if build[2] == nil then return end
+
+        local num = tonumber(build[2])
+        if num == nil then return end
+
+        if stuff[split[1]] == nil then
+            stuff[split[1]] = num
+        else
+            if stuff[split[1]] < num then
+                stuff[split[1]] = num
+            end
+        end
+    end)
+    
+    if stuff[config.version] == nil then
+        error("version not in yarn metadata xml")
     end
-    if config.intermediary == "" or config.intermediary == nil then
-        error("Missing intermediary url")
-    end
-    assert(Jice.get_or_cache(config.map, "mappings.jar", "mapping"))
-    assert(Jice.get_or_cache(config.intermediary, "intermediary.jar", "mapping"))
+
+    local thing = config.version .. "+build." .. tostring(stuff[config.version])
+    local url = "https://maven.fabricmc.net/net/fabricmc/yarn/" .. thing .. "/yarn-" .. thing .. ".jar"
+
+    assert(Jice.get_or_cache(url, "mappings.jar", "mapping"))
+    assert(Jice.get_or_cache("https://maven.fabricmc.net/net/fabricmc/intermediary/" .. config.version .. "/intermediary-" .. config.version .. ".jar", "intermediary.jar", "mapping"))
     assert(os.execute("cd ./.jice/mapping && unzip -qjo mappings.jar"));
     -- assert(os.execute("cd ./.jice/mapping && unzip -qjo intermediary.jar && mv mappings.tiny off2inter.tiny"));
     assert(Jice.get_or_cache(
