@@ -73,6 +73,9 @@ function Plugin.before_build()
     if config.version == "" or config.version == nil then
         error("Missing `version` field in config")
     end
+    if config.modid == "" or config.modid == nil then
+        error("Missing `modid` field in config")
+    end
     assert(Jice.get_or_cache("https://piston-meta.mojang.com/mc/game/version_manifest_v2.json", "versions.json", "mapping"))
 
     local manifest = assert(Jice.read_json("./.jice/mapping/versions.json"))
@@ -180,5 +183,15 @@ Fabric-Mapping-Namespace: intermediary")
     file:close()
     assert(os.execute("jar ufm ./.jice/build.jar " .. temp))
     assert(os.execute("java -jar ./.jice/mapping/remapper.jar ./.jice/build.jar ./.jice/build.jar ./.jice/mapping/mappings.tiny named intermediary >/dev/null"))
+end
+
+function Plugin.javac_args()
+    local path = assert(Jice.canonical_path("./.jice/output/" .. config.modid .. ".refmap.json"))
+    return {
+        "-processor", "org.spongepowered.tools.obfuscation.MixinObfuscationProcessorTargets,org.spongepowered.tools.obfuscation.MixinObfuscationProcessorInjection",
+        "-AinMapFileNamedIntermediary=./.jice/mapping/mappings.tiny",
+        "-AoutRefMapFile=" .. path,
+        "-AdefaultObfuscationEnv=named:intermediary"
+    }
 end
 return Plugin

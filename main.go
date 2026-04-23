@@ -121,7 +121,6 @@ func get_or_cache(url string, cache_name string, folder string) ([]byte, error) 
     defer resp.Body.Close();
 
     if resp.StatusCode == 404 {
-        // fmt.Println("404: " + url)
         return nil, errors.New("404")
     }
 
@@ -447,7 +446,6 @@ func build(config JiceConfig, thingy GroupArtifactToDep) {
     check(err);
 
     args := []string {
-        "-proc:none",
         "-cp", "./.jice/cache/*",
         "-d", "./.jice/output/",
     };
@@ -459,6 +457,33 @@ func build(config JiceConfig, thingy GroupArtifactToDep) {
     // TODO: Someone could put command args into filename and fuck shit up
     // EDIT: Changed to have ./ infront of the files. Perhaps thats enough
     args = append(args, javas...);
+
+    for k, p := range config.Plugins {
+        lv := config.L.GetTable(p.Table, lua.LString("javac_args"));
+        if fun, ok := lv.(*lua.LFunction); ok {
+            fmt.Println("Running plugin " + k + " javac_args")
+            err := config.L.CallByParam(lua.P {
+                Fn: fun,
+                NRet: 1,
+                Protect: true,
+            })
+            if err != nil {
+                panic("lua error in plugin " + k + ": " + err.Error())
+            }
+            a := config.L.Get(-1)
+            if a != nil {
+                if a.Type() == lua.LTTable {
+                    config.L.ForEach(a.(*lua.LTable), func(_, v lua.LValue) {
+                        if v.Type() == lua.LTString {
+                            args = append(args, v.String())
+                        }
+                    })
+                }
+            }
+        }
+    }
+
+    pp.Println(args)
 
     cmd := exec.Command("javac", args...);
     cmd.Stdout = os.Stdout;
@@ -904,6 +929,17 @@ func init_lua(config JiceConfig, deps []Dependency) {
             thing := L.CheckAny(1)
             pp.Println(thing)
             return 0;
+        },
+        "canonical_path": func(l *lua.LState) int {
+            path := L.CheckString(1)
+            abs, err := filepath.Abs(path)
+            if err != nil {
+                L.Push(lua.LNil)
+                L.Push(lua.LString(err.Error()))
+                return 2;
+            }
+            L.Push(lua.LString(abs))
+            return 1;
         },
     })
     L.SetGlobal("Jice", jice_tbl)
