@@ -1,2 +1,2 @@
 # Jice
-### A nice package manager for java that doesnt suck
+### A nice java build system that doesnt suck
