@@ -354,6 +354,8 @@ type JiceConfig struct {
         JavacArgs *[]string `kdl:"javac_args,omitempty"`
         DefaultRepo string `kdl:"default_repo,omitempty"`
         Resources *[]string `kdl:"resources,omitempty"`
+        Main *string `kdl:"main,omitempty"`
+        Classpath *[]string `kdl:"classpath,omitempty"`
     } `kdl:"package"`
     Dependencies map[string]string `kdl:"dependencies"`
     Repos map[string]string `kdl:"repos"`
@@ -363,7 +365,7 @@ type JiceConfig struct {
         Config map[string]any `kdl:"config"`
         Table *lua.LTable
     } `kdl:"plugins"`
-    Variants map[string]JiceConfig `kdl:variants`
+    Variants map[string]JiceConfig `kdl:"variants"`
 }
 
 type CacheThing struct {
@@ -444,9 +446,16 @@ func build(config JiceConfig, thingy GroupArtifactToDep) {
 
     javas, err := get_source_files(config);
     check(err);
+    
+    classpath := "./.jice/cache/*"
+    if config.Package.Classpath != nil {
+        for _, v := range *config.Package.Classpath {
+            classpath += ":" + v
+        }
+    }
 
     args := []string {
-        "-cp", "./.jice/cache/*",
+        "-cp", classpath,
         "-d", "./.jice/output/",
     };
 
@@ -483,8 +492,6 @@ func build(config JiceConfig, thingy GroupArtifactToDep) {
         }
     }
 
-    pp.Println(args)
-
     cmd := exec.Command("javac", args...);
     cmd.Stdout = os.Stdout;
     cmd.Stderr = os.Stderr;
@@ -515,6 +522,25 @@ func build(config JiceConfig, thingy GroupArtifactToDep) {
     cmd.Stderr = os.Stderr;
     err = cmd.Run()
     check(err);
+
+    if config.Package.Main != nil {
+        f, err := os.CreateTemp("/tmp", "jice_manifest_*")
+        check(err)
+
+        _, err = f.WriteString("Main-Class: " + *config.Package.Main + "\n")
+        check(err)
+
+        args = []string{
+            "ufm",
+            "./.jice/build.jar",
+            f.Name(),
+        }
+
+        cmd = exec.Command("jar", args...)
+        cmd.Stderr = os.Stderr
+        err = cmd.Run()
+        check(err)
+    }
 
     for k, p := range config.Plugins {
         lv := config.L.GetTable(p.Table, lua.LString("after_build"));
@@ -974,27 +1000,14 @@ func init_lua(config JiceConfig, deps []Dependency) {
 }
 
 func apply_config(config JiceConfig, second JiceConfig) JiceConfig {
-    /*
-    Package struct {
-        SourceDir []string `kdl:"source_dir"`
-        JavacArgs *[]string `kdl:"javac_args,omitempty"`
-        DefaultRepo string `kdl:"default_repo,omitempty"`
-        Resources *[]string `kdl:"resources,omitempty"`
-    } `kdl:"package"`
-    Dependencies map[string]string `kdl:"dependencies"`
-    Repos map[string]string `kdl:"repos"`
-    Extra map[string]string `kdl:"extra"`
-    Plugins map[string]struct {
-        Url string `kdl:"url"`
-        Config map[string]any `kdl:"config"`
-        Table *lua.LTable
-    } `kdl:"plugins"`
-    Variants map[string]JiceConfig `kdl:variants`
-    */
     config.Package.SourceDir = append(config.Package.SourceDir, second.Package.SourceDir...)
     config.Package.JavacArgs = append_optional_array_to_optional_array(config.Package.JavacArgs, second.Package.JavacArgs)
     config.Package.Resources = append_optional_array_to_optional_array(config.Package.Resources, second.Package.Resources)
     config.Package.DefaultRepo = second.Package.DefaultRepo
+    if second.Package.Main != nil {
+        config.Package.Main = second.Package.Main
+    }
+    config.Package.Classpath = append_optional_array_to_optional_array(config.Package.Classpath, second.Package.Classpath)
     
     if config.Dependencies == nil { config.Dependencies = make(map[string]string) }
     for k, v := range second.Dependencies {
