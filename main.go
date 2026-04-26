@@ -395,6 +395,9 @@ func build(config JiceConfig, thingy GroupArtifactToDep) {
         a := k.ArtifactId;
         v := d.Version;
 
+        tried_to_retry := false
+        retry:
+
         jar, _ := get_thing(strings.Replace(g, ".", "/", -1), a, v);
         if d.Repo == "from extra deps" {
             _, err := get_or_cache(
@@ -408,7 +411,7 @@ func build(config JiceConfig, thingy GroupArtifactToDep) {
                 "cache",
             );
             if err != nil {
-                fmt.Println("WARNING: Failed to get extra jar for " + g + " " + a + " " + v + ": " + err.Error());
+                fmt.Println("WARNING: Failed to get extra jar for " + g + " " + a + " " + v + " in " + d.Repo + " : " + err.Error());
             }
         } else {
             _, err := get_or_cache(
@@ -422,7 +425,12 @@ func build(config JiceConfig, thingy GroupArtifactToDep) {
                 "cache",
             );
             if err != nil {
-                fmt.Println("WARNING: Failed to get jar for " + g + " " + a + " " + v + ": " + err.Error());
+                d.Repo = config.Package.DefaultRepo
+                if !tried_to_retry {
+                    tried_to_retry = true
+                    goto retry
+                }
+                fmt.Println("WARNING: Failed to get jar for " + g + " " + a + " " + v + " in " + d.Repo + " : " + err.Error());
             }
         }
     }
