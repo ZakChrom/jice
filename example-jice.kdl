@@ -1,9 +1,24 @@
 package {
     // Array of paths. Looks for any .java files in the directory recursively
     source_dir "src"
-    default_repo "https://..." // Optional. The default repo is maven
     javac_args "args" // Optional. Extra args for javac
+
+    default_repo "https://..." // Optional. The default repo is maven
     resources "resources" // Optional. Extra files to put into the jar
+
+    // Optional. The default variant to use
+    default_variant "VARIANT"
+
+    // Optional. The main class if you wanna run the jar
+    main "com.example.Main"
+
+    // Optional. Array of paths
+    classpath "abc" "def"
+
+    // Optional. Same as before but .kt
+    kotlin_source_dir "src"
+    // Optional. Same as before
+    kotlinc_args "args"
 }
 
 // Optional. Extra jars to include that arent in repos

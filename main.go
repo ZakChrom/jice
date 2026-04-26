@@ -351,11 +351,14 @@ type JiceConfig struct {
     L *lua.LState
     Package struct {
         SourceDir []string `kdl:"source_dir"`
+        KotlinSourceDir *[]string `kdl:"kotlin_source_dir,omitempty"`
         JavacArgs *[]string `kdl:"javac_args,omitempty"`
+        KotlincArgs *[]string `kdl:"kotlinc_args,omitempty"`
         DefaultRepo string `kdl:"default_repo,omitempty"`
         Resources *[]string `kdl:"resources,omitempty"`
         Main *string `kdl:"main,omitempty"`
         Classpath *[]string `kdl:"classpath,omitempty"`
+        DefaultVariant *string `kdl:"default_variant,omitempty"`
     } `kdl:"package"`
     Dependencies map[string]string `kdl:"dependencies"`
     Repos map[string]string `kdl:"repos"`
@@ -372,20 +375,18 @@ type CacheThing struct {
     Mapped []string `kdl:"mapped"`
 }
 
-func get_source_files(config JiceConfig) ([]string, error) {
-    var javas []string;
-    for i := range config.Package.SourceDir {
-        err := filepath.WalkDir(config.Package.SourceDir[i], func(path string, d fs.DirEntry, err error) error {
-            if strings.HasSuffix(path, ".java") {
-                javas = append(javas, "./" + path)
-            }
-            return nil;
-        });
-        if err != nil {
-            return []string{}, nil
+func find_all_files_with_extension(in string, ext string) ([]string, error) {
+    var files []string;
+    err := filepath.WalkDir(in, func(path string, d fs.DirEntry, err error) error {
+        if strings.HasSuffix(path, "." + ext) {
+            files = append(files, "./" + path)
         }
+        return nil;
+    });
+    if err != nil {
+        return []string{}, nil
     }
-    return javas, nil
+    return files, nil
 }
 
 func build(config JiceConfig, thingy GroupArtifactToDep) {
@@ -444,18 +445,55 @@ func build(config JiceConfig, thingy GroupArtifactToDep) {
     os.RemoveAll("./.jice/output")
     os.Remove("./.jice/build.jar")
 
-    javas, err := get_source_files(config);
-    check(err);
+    var javas []string
+    for _, dir := range config.Package.SourceDir {
+        files, err := find_all_files_with_extension(dir, "java");
+        check(err);
+        javas = append(javas, files...)
+    }
     
-    classpath := "./.jice/cache/*"
+    classpath, err := find_all_files_with_extension("./.jice/cache/", "jar")
+    check(err)
     if config.Package.Classpath != nil {
         for _, v := range *config.Package.Classpath {
-            classpath += ":" + v
+            classpath = append(classpath, v)
         }
     }
 
+    if *config.Package.KotlinSourceDir != nil {
+        var kts []string
+        for _, dir := range *config.Package.KotlinSourceDir {
+            files, err := find_all_files_with_extension(dir, "kt");
+            check(err);
+            kts = append(kts, files...)
+        }
+        args := []string {
+            "-cp", strings.Join(classpath, ":"),
+            "-d", "./.jice/output/",
+        };
+
+        if config.Package.KotlincArgs != nil {
+            args = append(args, *config.Package.KotlincArgs...);
+        }
+
+        args = append(args, javas...);
+        args = append(args, kts...);
+    
+        cmd := exec.Command("kotlinc", args...);
+        cmd.Stdout = os.Stdout;
+        cmd.Stderr = os.Stderr;
+    
+        err := cmd.Run();
+        if err != nil {
+            fmt.Println("kotlinc failed: " + err.Error())
+            os.Exit(1)
+        }
+
+        classpath = append(classpath, "./.jice/output/")
+    }
+
     args := []string {
-        "-cp", classpath,
+        "-cp", strings.Join(classpath, ":"),
         "-d", "./.jice/output/",
     };
 
@@ -497,7 +535,10 @@ func build(config JiceConfig, thingy GroupArtifactToDep) {
     cmd.Stderr = os.Stderr;
 
     err = cmd.Run();
-    check(err);
+    if err != nil {
+       fmt.Println("javac failed: " + err.Error())
+       os.Exit(1)
+    }
 
     args = []string{
         "cvf",
@@ -521,7 +562,10 @@ func build(config JiceConfig, thingy GroupArtifactToDep) {
     cmd = exec.Command("jar", args...)
     cmd.Stderr = os.Stderr;
     err = cmd.Run()
-    check(err);
+    if err != nil {
+        fmt.Println("jar failed: " + err.Error())
+        os.Exit(1)
+    }
 
     if config.Package.Main != nil {
         f, err := os.CreateTemp("/tmp", "jice_manifest_*")
@@ -539,7 +583,10 @@ func build(config JiceConfig, thingy GroupArtifactToDep) {
         cmd = exec.Command("jar", args...)
         cmd.Stderr = os.Stderr
         err = cmd.Run()
-        check(err)
+        if err != nil {
+            fmt.Println("jar failed: " + err.Error())
+            os.Exit(1)
+        }
     }
 
     for k, p := range config.Plugins {
@@ -1080,6 +1127,9 @@ func main() {
         return;
     }
     variants := []string{}
+    if config.Package.DefaultVariant != nil {
+        variants = append(variants, *config.Package.DefaultVariant)
+    }
     i := 0
     for true {
         if i >= len(args) { break }
@@ -1116,8 +1166,12 @@ func main() {
     } else if args[0] == "tree" {
         tree(get_all_deps_from_config(config), 0, "")
     } else if args[0] == "doc" {
-        javas, err := get_source_files(config);
-        check(err);
+        var javas []string
+        for _, dir := range config.Package.SourceDir {
+            files, err := find_all_files_with_extension(dir, "java");
+            check(err);
+            javas = append(javas, files...)
+        }
 
         args := []string{
             "-d", "./.jice/doc/",
