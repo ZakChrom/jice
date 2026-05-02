@@ -49,6 +49,11 @@ plugins {
         config {
             modid "modid"
             version "1.21.11"
+
+            // One of these must be present
+            map_type "yarn"
+            // map_type "official"
+            // map_type "none"
         }
     }
 }

@@ -1,8 +1,8 @@
 package main
 
 import (
+	"encoding/json"
 	"encoding/xml"
-    "encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -52,6 +52,7 @@ func (p *XMLProperties) UnmarshalXML(d *xml.Decoder, start xml.StartElement) err
 }
 
 type Project struct {
+    Repo string
     Parent *struct {
         GroupId string `xml:"groupId"`
         ArtifactId string `xml:"artifactId"`
@@ -69,6 +70,7 @@ type Project struct {
         ArtifactId string `xml:"artifactId"`
         Version *string `xml:"version,omitempty"`
         Scope *string `xml:"scope,omitempty"`
+        Optional bool `xml:"optional,omitempty"`
     } `xml:"dependencies>dependency"`
     DependencyManagement []struct {
         GroupId string `xml:"groupId"`
@@ -103,7 +105,7 @@ func exists(path string) (bool, error) {
 
 func get_or_cache(url string, cache_name string, folder string) ([]byte, error) {
     path := "./.jice/" + folder + "/";
-    err := os.MkdirAll(path, 0775);
+    err := os.MkdirAll(path, 0775); // TODO: Inefficient
     check(err);
 
     path += cache_name;
@@ -116,7 +118,10 @@ func get_or_cache(url string, cache_name string, folder string) ([]byte, error) 
         return text, nil;
     }
 
-    resp, err := http.Get(url);
+    req, err := http.NewRequest("GET", url, nil)
+    check(err)
+    req.Header.Add("User-Agent", "Jice (build tool) (https://github.com/ZakChrom/jice). Contact: @calion:codersquack.nl on matrix")
+    resp, err := http.DefaultClient.Do(req)
     check(err);
     defer resp.Body.Close();
 
@@ -187,20 +192,39 @@ func replace_stupid_string_with_props(s string, props map[string]string) string 
     return new;
 }
 
-func get_dep(config JiceConfig, repo string, g string, a string, v string) Project {
+func get_repos(config JiceConfig) []string {
+    repos := []string{config.Package.DefaultRepo}
+    if config.Repos != nil {
+        for k := range config.Repos {
+            repos = append(repos, k)
+        }
+    }
+    return repos
+}
+
+func get_dep(config JiceConfig, g string, a string, v string) Project {
     _, pom := get_thing(strings.Replace(g, ".", "/", -1), a, v);
 
-    thing := fmt.Sprintf("%s-%s-%s.pom", url.QueryEscape(g), url.QueryEscape(a), url.QueryEscape(v));
-    var pom_content, err = get_or_cache(repo + "/" + pom, thing, "cache");
-    if err != nil {
-        pom_content, err = get_or_cache(config.Package.DefaultRepo + "/" + pom, thing, "cache");
-        check(err)
+    thing := fmt.Sprintf("%s-%s.pom", url.QueryEscape(g), url.QueryEscape(a));
+    repos := get_repos(config)
+    var pom_content []byte
+    var err error
+    var repo string
+    for _, r := range repos {
+        pom_content, err = get_or_cache(r + "/" + pom, thing, "cache");
+        if err == nil {
+            repo = r
+            break
+        }
     }
+    check(err);
     // fmt.Println(string(pom_content));
 
     var project Project;
     err = xml.Unmarshal(pom_content, &project);
     check(err);
+
+    project.Repo = repo
 
     props := make(map[string]string);
     management := make(GroupArtifactToDep);
@@ -210,10 +234,11 @@ func get_dep(config JiceConfig, repo string, g string, a string, v string) Proje
         if strings.Contains(project.Parent.ArtifactId, "${") { panic("fuck off") }
         if strings.Contains(project.Parent.Version, "${")    { panic("fuck off") }
 
-        parent = get_dep(config, repo, project.Parent.GroupId, project.Parent.ArtifactId, project.Parent.Version);
+        parent = get_dep(config, project.Parent.GroupId, project.Parent.ArtifactId, project.Parent.Version);
         maps.Copy(props, parent.Properties)
 
         if project.GroupId == nil {
+            props["project.groupId"] = *parent.GroupId;
             project.GroupId = parent.GroupId
         }
         if project.Version == nil {
@@ -235,6 +260,10 @@ func get_dep(config JiceConfig, repo string, g string, a string, v string) Proje
     _, ok := props["project.version"];
     if !ok {
         props["project.version"] = *project.Version;
+    }
+    _, ok = props["project.groupId"];
+    if !ok {
+        props["project.groupId"] = *project.GroupId;
     }
 
     if project.Parent != nil {
@@ -299,36 +328,62 @@ func get_dep(config JiceConfig, repo string, g string, a string, v string) Proje
     return project;
 }
 
-func get_all(config JiceConfig, repo string, g string, a string, v string) Dependency {
+func get_all(config JiceConfig, g string, a string, v string) Dependency {
+    // d, ok := (*ga2dep)[struct { GroupId string; ArtifactId string } {
+    //     GroupId: "",
+    //     ArtifactId: "",
+    // }];
+    // if ok { return d }
+
     var real Dependency;
-    dep := get_dep(config, repo, g, a, v);
+    dep := get_dep(config, g, a, v);
     real.Group = *dep.GroupId;
     real.Artifact = dep.ArtifactId;
     real.Version = *dep.Version;
     real.Name = dep.Name;
     real.Description = dep.Description;
     real.Url = dep.Url;
-    real.Repo = repo;
+    real.Repo = dep.Repo
     // pp.Println(real.Group, real.Artifact, real.Version);
+    // time.Sleep(time.Millisecond * 10)
 
     var deps []Dependency;
     for _, d := range dep.Dependencies {
+        if d.Optional {
+            continue
+        }
         if d.Scope != nil {
             if *d.Scope == "test" {
                 continue
-            } else if *d.Scope == "compile" || *d.Scope == "runtime" {
+            } else if *d.Scope == "compile" || *d.Scope == "runtime" || *d.Scope == "provided" {
 
             } else {
                 panic("Unexpected scope: " + *d.Scope)
             }
         }
-        deps = append(deps, get_all(config, repo, d.GroupId, d.ArtifactId, *d.Version));
+        if d.ArtifactId == "fabric-api-deprecated" { continue }
+        // _, ok := (*ga2dep)[struct { GroupId string; ArtifactId string } {
+        //     GroupId: d.GroupId,
+        //     ArtifactId: d.ArtifactId,
+        // }]
+        // // TODO: Will fuck up the dependency tree but we cant exactly do anything about it
+        // // Its somewhere in the tree already so building should still work
+        // if ok { continue }
+        deps = append(deps, get_all(config, d.GroupId, d.ArtifactId, *d.Version));
     }
     real.Dependencies = deps;
+    // ga2dep_new := make(GroupArtifactToDep);
+    // make_ga2dep(ga2dep_new, deps)
+    // for k, v := range ga2dep_new {
+    //     _, ok = (*ga2dep)[k]
+    //     if !ok {
+    //         (*ga2dep)[k] = v
+    //     }
+    // }
     return real;
 }
 
-func tree(deps []Dependency, indent int, prefix string) {
+func tree(deps []Dependency, indent int, prefix string, ga2dep GroupArtifactToDep) {
     for i, d := range deps {
         last := i == len(deps) - 1
 
@@ -336,14 +391,27 @@ func tree(deps []Dependency, indent int, prefix string) {
         if last {
             thing = "└── "
         }
-        fmt.Println(prefix + thing + "\x1b[38;2;140;140;140m" + d.Group + " \x1b[0m" + d.Artifact + " \x1b[38;2;184;168;255m" + d.Version + "\x1b[0m")
+        fmt.Print(prefix + thing + "\x1b[38;2;140;140;140m" + d.Group + " \x1b[0m" + d.Artifact + " \x1b[38;2;184;168;255m" + d.Version + "\x1b[0m")
         new := prefix
         if last {
             new += "   "
         } else {
             new += "│  "
         }
-        tree(d.Dependencies, indent + 1, new);
+        _, ok := ga2dep[struct { GroupId string; ArtifactId string } {
+            GroupId: d.Group,
+            ArtifactId: d.Artifact,
+        }]
+        if !ok {
+            fmt.Println()
+            ga2dep[struct { GroupId string; ArtifactId string } {
+                GroupId: d.Group,
+                ArtifactId: d.Artifact,
+            }] = d
+            tree(d.Dependencies, indent + 1, new, ga2dep);
+        } else {
+            fmt.Println(" (*)")
+        }
     }
 }
 
@@ -361,7 +429,7 @@ type JiceConfig struct {
         DefaultVariant *string `kdl:"default_variant,omitempty"`
     } `kdl:"package"`
     Dependencies map[string]string `kdl:"dependencies"`
-    Repos map[string]string `kdl:"repos"`
+    Repos map[string]string `kdl:"repos,omitempty"`
     Extra map[string]string `kdl:"extra"`
     Plugins map[string]struct {
         Url string `kdl:"url"`
@@ -395,41 +463,36 @@ func build(config JiceConfig, thingy GroupArtifactToDep) {
         a := k.ArtifactId;
         v := d.Version;
 
-        tried_to_retry := false
-        retry:
-
         jar, _ := get_thing(strings.Replace(g, ".", "/", -1), a, v);
         if d.Repo == "from extra deps" {
             _, err := get_or_cache(
                 *d.Url,
                 fmt.Sprintf(
-                    "%s-%s-%s.jar",
+                    "%s-%s.jar",
                     url.QueryEscape(g),
                     url.QueryEscape(a),
-                    url.QueryEscape(v),
                 ),
                 "cache",
             );
             if err != nil {
-                fmt.Println("WARNING: Failed to get extra jar for " + g + " " + a + " " + v + " in " + d.Repo + " : " + err.Error());
+                fmt.Println("WARNING: Failed to get extra jar for " + g + " " + a + " " + v + " from " + *d.Url + " : " + err.Error());
             }
         } else {
-            _, err := get_or_cache(
-                d.Repo + "/" + jar,
-                fmt.Sprintf(
-                    "%s-%s-%s.jar",
-                    url.QueryEscape(g),
-                    url.QueryEscape(a),
-                    url.QueryEscape(v),
-                ),
-                "cache",
-            );
+            repos := get_repos(config)
+            var err error
+            for _, r := range repos {
+                _, err = get_or_cache(
+                    r + "/" + jar,
+                    fmt.Sprintf(
+                        "%s-%s.jar",
+                        url.QueryEscape(g),
+                        url.QueryEscape(a),
+                    ),
+                    "cache",
+                );
+                if err == nil { break }
+            }
             if err != nil {
-                d.Repo = config.Package.DefaultRepo
-                if !tried_to_retry {
-                    tried_to_retry = true
-                    goto retry
-                }
                 fmt.Println("WARNING: Failed to get jar for " + g + " " + a + " " + v + " in " + d.Repo + " : " + err.Error());
             }
         }
@@ -614,15 +677,17 @@ func build(config JiceConfig, thingy GroupArtifactToDep) {
 }
 
 func get_all_deps_from_config(config JiceConfig) []Dependency {
+    // ga2dep := make(GroupArtifactToDep);
+
     var deps []Dependency;
     for k, v := range config.Dependencies {
-        repo := config.Package.DefaultRepo;
-        r, ok := config.Repos[k];
-        if ok {
-            repo = r;
-        }
         thing := strings.Split(k, ":");
-        deps = append(deps, get_all(config, repo, thing[0], thing[1], v));
+        // _, ok := ga2dep[struct { GroupId string; ArtifactId string } {
+        //     GroupId: thing[0],
+        //     ArtifactId: thing[1],
+        // }]
+        // if ok { continue }
+        deps = append(deps, get_all(config, thing[0], thing[1], v));
     }
     for k, d := range config.Extra {
         thing := strings.Split(k, ":");
@@ -1074,6 +1139,23 @@ func apply_config(config JiceConfig, second JiceConfig) JiceConfig {
         config.Repos[k] = v
     }
 
+    // if config.Repos == nil {
+    //     config.Repos = second.Repos
+    // } else if second.Repos != nil {
+    //     for _, a := range *second.Repos {
+    //         found := false
+    //         for _, b := range *config.Repos {
+    //             if a == b {
+    //                 found = true
+    //                 break
+    //             }
+    //         }
+    //         if !found {
+    //             *config.Repos = append(*config.Repos, a)
+    //         }
+    //     }
+    // }
+
     if config.Extra == nil { config.Extra = make(map[string]string) }
     for k, v := range second.Extra {
         config.Extra[k] = v
@@ -1172,7 +1254,8 @@ func main() {
     } else if args[0] == "clean" {
         os.RemoveAll("./.jice")
     } else if args[0] == "tree" {
-        tree(get_all_deps_from_config(config), 0, "")
+        ga2dep := make(GroupArtifactToDep);
+        tree(get_all_deps_from_config(config), 0, "", ga2dep)
     } else if args[0] == "doc" {
         var javas []string
         for _, dir := range config.Package.SourceDir {
