@@ -333,6 +333,14 @@ function Plugin.before_build()
 end
 
 function Plugin.after_build()
+    local namespace
+    if config.map_type == "yarn" then
+        namespace = "intermediary"
+    elseif config.map_type == "official" then
+        namespace = "official"
+    else
+        error()
+    end
     local temp = os.tmpname()
     local file = io.open(temp, "w")
     assert(file ~= nil)
@@ -340,19 +348,28 @@ function Plugin.after_build()
 Fabric-Loom-Mixin-Remap-Type: mixin\
 Fabric-Minecraft-Version: " .. config.version .. "\
 Fabric-Mixin-Group: net.fabricmc\
-Fabric-Mapping-Namespace: intermediary")
+Fabric-Mapping-Namespace: " .. namespace)
     file:close()
     assert(os.execute("jar ufm ./.jice/build.jar " .. temp))
-    assert(os.execute("java -jar ./.jice/mapping/remapper.jar ./.jice/build.jar ./.jice/build.jar ./.jice/mapping/mappings.tiny named intermediary >/dev/null"))
+    assert(os.execute("java -jar ./.jice/mapping/remapper.jar ./.jice/build.jar ./.jice/build.jar ./.jice/mapping/mappings.tiny named " .. namespace .. " >/dev/null"))
 end
 
 function Plugin.javac_args()
+    local namespace
+    if config.map_type == "yarn" then
+        namespace = "intermediary"
+    elseif config.map_type == "official" then
+        namespace = "official"
+    else
+        error()
+    end
+
     local path = assert(Jice.canonical_path("./.jice/output/" .. config.modid .. ".refmap.json"))
     return {
         "-processor", "org.spongepowered.tools.obfuscation.MixinObfuscationProcessorTargets,org.spongepowered.tools.obfuscation.MixinObfuscationProcessorInjection",
         "-AinMapFileNamedIntermediary=./.jice/mapping/mappings.tiny",
         "-AoutRefMapFile=" .. path,
-        "-AdefaultObfuscationEnv=named:intermediary"
+        "-AdefaultObfuscationEnv=named:" .. namespace
     }
 end
 return Plugin
